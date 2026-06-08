@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Xcode build artifacts
+ios/**/build/
+**/*.pcm
+**/ModuleCache.noindex/
+**/DerivedData/
+xcuserdata/
+
+# Cloudflare Wrangler
+.wrangler/
+
+# Node
+node_modules/

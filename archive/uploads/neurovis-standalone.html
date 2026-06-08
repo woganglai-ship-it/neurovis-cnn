@@ -1,0 +1,3821 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="theme-color" content="#e8e6df" />
+<title>NeuroVis · CNN 模块原型 (单文件版)</title>
+<style>
+/* NeuroVis design tokens */
+:root {
+  /* Brand */
+  --brand-primary: #1e3a8a;       /* deep blue */
+  --brand-primary-2: #2851d6;     /* lighter blue */
+  --brand-accent: #f59e0b;        /* warm amber for CTA / current */
+  --brand-accent-2: #fbbf24;
+
+  /* Base — warm off-white */
+  --bg: #fdfdfb;
+  --bg-elevated: #ffffff;
+  --bg-grouped: #f5f4ef;
+  --bg-card: #ffffff;
+  --separator: rgba(60,60,67,0.10);
+  --separator-strong: rgba(60,60,67,0.18);
+
+  /* Text */
+  --text: #0c0c0e;
+  --text-2: #3a3a40;
+  --text-3: rgba(60,60,67,0.6);
+  --text-4: rgba(60,60,67,0.3);
+
+  /* Activation legend (red-white-blue) */
+  --act-pos: #2563eb;
+  --act-neg: #dc2626;
+  --act-zero: #ffffff;
+
+  /* Weight legend (yellow-white-green) */
+  --w-pos: #10b981;
+  --w-neg: #eab308;
+
+  /* Layer kind tints (very subtle) */
+  --layer-conv: rgba(30, 58, 138, 0.08);
+  --layer-relu: rgba(245, 158, 11, 0.10);
+  --layer-pool: rgba(16, 185, 129, 0.10);
+  --layer-softmax: rgba(217, 70, 239, 0.10);
+  --layer-input: rgba(60,60,67,0.06);
+
+  /* Border accents per layer */
+  --layer-conv-edge: #1e3a8a;
+  --layer-relu-edge: #c2700a;
+  --layer-pool-edge: #047857;
+  --layer-softmax-edge: #a21caf;
+  --layer-input-edge: #4b5563;
+
+  /* Type */
+  --font-cn: "PingFang SC", "Hiragino Sans GB", system-ui, -apple-system, "SF Pro", sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
+
+  /* Radii */
+  --r-sm: 8px;
+  --r-md: 14px;
+  --r-lg: 22px;
+  --r-xl: 28px;
+
+  /* Shadows */
+  --shadow-1: 0 1px 2px rgba(20,20,40,0.04), 0 4px 12px rgba(20,20,40,0.04);
+  --shadow-2: 0 2px 6px rgba(20,20,40,0.06), 0 12px 32px rgba(20,20,40,0.08);
+  --shadow-3: 0 8px 24px rgba(20,20,40,0.10), 0 24px 60px rgba(20,20,40,0.14);
+}
+
+[data-theme="dark"] {
+  --bg: #0E0E10;
+  --bg-elevated: #1c1c1e;
+  --bg-grouped: #000;
+  --bg-card: #1c1c1e;
+  --separator: rgba(84,84,88,0.45);
+  --separator-strong: rgba(84,84,88,0.65);
+  --text: #ffffff;
+  --text-2: rgba(235,235,245,0.85);
+  --text-3: rgba(235,235,245,0.6);
+  --text-4: rgba(235,235,245,0.3);
+  --act-zero: #1c1c1e;
+  --layer-conv: rgba(96, 138, 255, 0.14);
+  --layer-relu: rgba(245, 158, 11, 0.16);
+  --layer-pool: rgba(16, 185, 129, 0.18);
+  --layer-softmax: rgba(217, 70, 239, 0.18);
+  --layer-input: rgba(255,255,255,0.06);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0; padding: 0;
+  font-family: var(--font-cn);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background: #e8e6df;
+  min-height: 100vh;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+
+.mono { font-family: var(--font-mono); font-feature-settings: "tnum"; }
+button { font-family: inherit; cursor: pointer; }
+
+@keyframes splashIn { from { opacity: 0; transform: translateY(8px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes splashCell { from { opacity: 0; transform: scale(0.4); } to { opacity: 1; transform: scale(1); } }
+@keyframes onbSlide { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes tilePulse { 0% { transform: scale(0.85); opacity: 0.4; } 50% { transform: scale(1); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+@keyframes spineDot { 0% { opacity: 0; transform: translateX(-8px) scale(0.4); } 40% { opacity: 1; transform: translateX(0) scale(1.4); } 100% { opacity: 0; transform: translateX(8px) scale(1); } }
+@keyframes softmaxIn { from { opacity: 0.5; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes sheetFade { from { background: rgba(0,0,0,0); } to { background: rgba(0,0,0,0.32); } }
+@keyframes sheetIn { from { transform: translateY(100%); } to { transform: translateY(0); } }
+body { background: #e8e6df; margin: 0; }
+html, body { overscroll-behavior: none; }
+body.app-mode { background: var(--bg, #f2f2f7); }
+body.app-mode #root { width: 100vw; min-height: 100vh; min-height: 100dvh; }
+#root { transform-origin: top center; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="jumper-root"></div>
+
+<script>
+(function () {
+  var CONTENT_W = 430, CONTENT_H = 940;
+  var param = new URLSearchParams(location.search).get('scale');
+  var fixed = parseFloat(param);
+  var useAuto = !(fixed > 0 && fixed <= 2);
+  var mobileMQ = window.matchMedia('(max-width: 540px)');
+  if (useAuto && mobileMQ.matches) return;
+  var root = document.getElementById('root');
+  function apply(s) { root.style.transform = 'scale(' + s + ')'; document.body.style.minHeight = (s * CONTENT_H) + 'px'; }
+  function fit() { var s = Math.min(window.innerWidth / CONTENT_W, window.innerHeight / CONTENT_H); apply(Math.min(s, 1)); }
+  if (useAuto) { fit(); window.addEventListener('resize', fit); } else { apply(fixed); }
+})();
+</script>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+
+<!-- ===== src/cnn/filters.js ===== -->
+<script>
+// 手设的 3x3 滤波器，用于第一层卷积 conv_1_1
+// 每个滤波器作用于 RGB 3 通道，输出 1 个 channel。10 个滤波器 → 10 个输出 channel。
+// 这些是教科书里可解释的核：能在熊猫/茶/地铁等不同 emoji 上产生有意义、可识别的特征图。
+window.HAND_FILTERS_3x3 = [
+  // 0: Sobel X — 水平梯度 (检测竖直边缘)
+  [[-1, 0, 1],
+   [-2, 0, 2],
+   [-1, 0, 1]],
+
+  // 1: Sobel Y — 垂直梯度 (检测水平边缘)
+  [[-1, -2, -1],
+   [ 0,  0,  0],
+   [ 1,  2,  1]],
+
+  // 2: Laplacian — 全方向边缘 / 高频
+  [[ 0, -1,  0],
+   [-1,  4, -1],
+   [ 0, -1,  0]],
+
+  // 3: Gaussian blur (1/16 系数)
+  [[1/16, 2/16, 1/16],
+   [2/16, 4/16, 2/16],
+   [1/16, 2/16, 1/16]],
+
+  // 4: Sharpen
+  [[ 0, -1,  0],
+   [-1,  5, -1],
+   [ 0, -1,  0]],
+
+  // 5: 对角边缘 ↘
+  [[-2, -1,  0],
+   [-1,  1,  1],
+   [ 0,  1,  2]],
+
+  // 6: 对角边缘 ↙
+  [[ 0,  1,  2],
+   [-1,  1,  1],
+   [-2, -1,  0]],
+
+  // 7: Emboss (浮雕)
+  [[-2, -1,  0],
+   [-1,  1,  1],
+   [ 0,  1,  2]],
+
+  // 8: 高通 (检测细节/纹理)
+  [[ -1, -1, -1],
+   [ -1,  8, -1],
+   [ -1, -1, -1]],
+
+  // 9: Identity-ish (温和恒等 + 一点边缘)
+  [[ 0,  0,  0],
+   [ 0,  1,  0],
+   [ 0,  0,  0]],
+];
+
+// 每个 filter 对 R/G/B 三通道分别给一个权重 (用于强调某个色道)
+// 形状: [10 filters][3 channels (R,G,B)]
+window.HAND_FILTERS_RGB_MIX = [
+  // 灰度 (对所有边缘/纹理类滤波器用灰度混合)
+  [0.299, 0.587, 0.114], // 0 Sobel X — 灰度
+  [0.299, 0.587, 0.114], // 1 Sobel Y — 灰度
+  [0.299, 0.587, 0.114], // 2 Laplacian — 灰度
+  [0.333, 0.333, 0.333], // 3 Gaussian — 平均
+  [0.299, 0.587, 0.114], // 4 Sharpen — 灰度
+  [0.299, 0.587, 0.114], // 5 对角 ↘ — 灰度
+  [0.299, 0.587, 0.114], // 6 对角 ↙ — 灰度
+  [ 0.8, -0.4, -0.4],    // 7 强调红
+  [-0.4,  0.8, -0.4],    // 8 强调绿
+  [-0.4, -0.4,  0.8],    // 9 强调蓝
+];
+
+</script>
+
+<!-- ===== src/cnn/engine.js ===== -->
+<script>
+/* global HAND_FILTERS_3x3, HAND_FILTERS_RGB_MIX */
+
+// Tiny VGG forward pass，纯 JS 实现，不依赖任何外部库。
+//
+// 为什么不用 tfjs：
+//   原来用 tf.layers + WebGL backend，在 mac Chrome 上正常，但在微信内置 WebView /
+//   iOS Safari 上某些张量形状会塌缩或返回错的值（中间层特征图被渲染成纯色块），
+//   且 tf.randomUniform 的种子在不同 backend 间不可复现，电脑/手机会拿到两套不同权重。
+//   纯 JS 实现 + mulberry32 伪随机 → 跨平台完全确定性，64×64 输入 ~50ms 跑完。
+//
+// 数据格式：所有特征图都是 [H][W][C] 嵌套 JS 数组。
+// 权重格式：conv 是 [kH][kW][inCh][outCh]，dense 是 [inSize][outSize]。
+
+(function () {
+  // ── 确定性伪随机 ───────────────────────────────────────────────
+  function mulberry32(seed) {
+    return function () {
+      seed = (seed + 0x6D2B79F5) | 0;
+      let t = seed;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  // ── 权重生成 ──────────────────────────────────────────────────
+  function buildConv1_1Weights() {
+    // [3][3][3][10]：每个 outCh 用一个手设 3x3 核 × 对应的 RGB 混合系数
+    const W = [];
+    for (let y = 0; y < 3; y++) {
+      W[y] = [];
+      for (let x = 0; x < 3; x++) {
+        W[y][x] = [];
+        for (let ic = 0; ic < 3; ic++) {
+          W[y][x][ic] = [];
+          for (let oc = 0; oc < 10; oc++) {
+            W[y][x][ic][oc] = HAND_FILTERS_3x3[oc][y][x] * HAND_FILTERS_RGB_MIX[oc][ic];
+          }
+        }
+      }
+    }
+    return W;
+  }
+
+  function genConvWeights(inCh, outCh, seed) {
+    const limit = Math.sqrt(6 / (3 * 3 * inCh + 3 * 3 * outCh));
+    const rng = mulberry32(seed);
+    const W = [];
+    for (let y = 0; y < 3; y++) {
+      W[y] = [];
+      for (let x = 0; x < 3; x++) {
+        W[y][x] = [];
+        for (let ic = 0; ic < inCh; ic++) {
+          W[y][x][ic] = [];
+          for (let oc = 0; oc < outCh; oc++) {
+            W[y][x][ic][oc] = (rng() * 2 - 1) * limit;
+          }
+        }
+      }
+    }
+    return W;
+  }
+
+  function genDenseWeights(inSize, outSize, seed) {
+    const limit = Math.sqrt(6 / (inSize + outSize));
+    const rng = mulberry32(seed);
+    const W = [];
+    for (let n = 0; n < inSize; n++) {
+      W[n] = [];
+      for (let m = 0; m < outSize; m++) {
+        W[n][m] = (rng() * 2 - 1) * limit;
+      }
+    }
+    return W;
+  }
+
+  // ── 卷积 (3x3, VALID padding, stride=1) ──────────────────────
+  function conv2d(input, kernel) {
+    const H = input.length;
+    const W = input[0].length;
+    const inCh = input[0][0].length;
+    const outCh = kernel[0][0][0].length;
+    const outH = H - 2;
+    const outW = W - 2;
+    const out = new Array(outH);
+    for (let y = 0; y < outH; y++) {
+      const row = new Array(outW);
+      for (let x = 0; x < outW; x++) {
+        const acc = new Float32Array(outCh);
+        for (let ky = 0; ky < 3; ky++) {
+          for (let kx = 0; kx < 3; kx++) {
+            const ipx = input[y + ky][x + kx];
+            const kpx = kernel[ky][kx];
+            for (let ic = 0; ic < inCh; ic++) {
+              const v = ipx[ic];
+              const kic = kpx[ic];
+              for (let oc = 0; oc < outCh; oc++) {
+                acc[oc] += v * kic[oc];
+              }
+            }
+          }
+        }
+        row[x] = Array.from(acc);
+      }
+      out[y] = row;
+    }
+    return out;
+  }
+
+  function relu(input) {
+    const H = input.length;
+    const W = input[0].length;
+    const ch = input[0][0].length;
+    const out = new Array(H);
+    for (let y = 0; y < H; y++) {
+      const row = new Array(W);
+      for (let x = 0; x < W; x++) {
+        const px = new Array(ch);
+        const ipx = input[y][x];
+        for (let c = 0; c < ch; c++) px[c] = ipx[c] > 0 ? ipx[c] : 0;
+        row[x] = px;
+      }
+      out[y] = row;
+    }
+    return out;
+  }
+
+  function maxpool2x2(input) {
+    const H = input.length;
+    const W = input[0].length;
+    const ch = input[0][0].length;
+    const outH = Math.floor(H / 2);
+    const outW = Math.floor(W / 2);
+    const out = new Array(outH);
+    for (let y = 0; y < outH; y++) {
+      const row = new Array(outW);
+      for (let x = 0; x < outW; x++) {
+        const px = new Array(ch).fill(-Infinity);
+        for (let dy = 0; dy < 2; dy++) {
+          for (let dx = 0; dx < 2; dx++) {
+            const ipx = input[y * 2 + dy][x * 2 + dx];
+            for (let c = 0; c < ch; c++) {
+              if (ipx[c] > px[c]) px[c] = ipx[c];
+            }
+          }
+        }
+        row[x] = px;
+      }
+      out[y] = row;
+    }
+    return out;
+  }
+
+  function flatten(input) {
+    const H = input.length;
+    const W = input[0].length;
+    const ch = input[0][0].length;
+    const out = new Array(H * W * ch);
+    let i = 0;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const px = input[y][x];
+        for (let c = 0; c < ch; c++) out[i++] = px[c];
+      }
+    }
+    return out;
+  }
+
+  function dense(input, weight) {
+    const M = weight[0].length;
+    const out = new Float32Array(M);
+    for (let n = 0; n < input.length; n++) {
+      const v = input[n];
+      const row = weight[n];
+      for (let m = 0; m < M; m++) out[m] += v * row[m];
+    }
+    return Array.from(out);
+  }
+
+  function softmax(input) {
+    let max = -Infinity;
+    for (const v of input) if (v > max) max = v;
+    const exp = input.map(v => Math.exp(v - max));
+    const sum = exp.reduce((a, b) => a + b, 0);
+    return exp.map(v => v / sum);
+  }
+
+  // ── 模型权重（懒加载） ─────────────────────────────────────────
+  let _weights = null;
+  function getWeights() {
+    if (_weights) return _weights;
+    _weights = {
+      conv_1_1: buildConv1_1Weights(),
+      conv_1_2: genConvWeights(10, 10, 11),
+      conv_2_1: genConvWeights(10, 10, 12),
+      conv_2_2: genConvWeights(10, 10, 13),
+      dense:    genDenseWeights(13 * 13 * 10, 10, 14),
+    };
+    return _weights;
+  }
+
+  // 输入: rgbInput [64][64][3]，值域 [0,1]
+  // 输出: 各层激活的对象，key 与 LAYERS 的 id 对齐
+  async function runForward(rgbInput) {
+    const W = getWeights();
+    const conv_1_1 = conv2d(rgbInput, W.conv_1_1);
+    const relu_1_1 = relu(conv_1_1);
+    const conv_1_2 = conv2d(relu_1_1, W.conv_1_2);
+    const relu_1_2 = relu(conv_1_2);
+    const pool_1   = maxpool2x2(relu_1_2);
+    const conv_2_1 = conv2d(pool_1, W.conv_2_1);
+    const relu_2_1 = relu(conv_2_1);
+    const conv_2_2 = conv2d(relu_2_1, W.conv_2_2);
+    const relu_2_2 = relu(conv_2_2);
+    const pool_2   = maxpool2x2(relu_2_2);
+    const flat     = flatten(pool_2);
+    const logits   = dense(flat, W.dense);
+    const output   = softmax(logits);
+    return {
+      conv_1_1, relu_1_1, conv_1_2, relu_1_2, pool_1,
+      conv_2_1, relu_2_1, conv_2_2, relu_2_2, pool_2,
+      output,
+    };
+  }
+
+  // L2/L3 演示要拉某个 conv 层的 3x3 kernel 切片
+  function getKernelSlice(layerId, outChIdx, inChIdx = 0) {
+    const kernel = getWeights()[layerId];
+    if (!kernel) return null;
+    const slice = [];
+    for (let y = 0; y < 3; y++) {
+      const row = [];
+      for (let x = 0; x < 3; x++) row.push(kernel[y][x][inChIdx][outChIdx]);
+      slice.push(row);
+    }
+    return slice;
+  }
+
+  window.CNN = {
+    runForward,
+    getKernelSlice,
+  };
+})();
+
+</script>
+
+<!-- ===== src/cnn/inputs.js ===== -->
+<script>
+/* global CATEGORIES */
+
+// 把每个 CATEGORY 的 emoji 渲染到 64x64 canvas，做成 CNN 的真实输入图像。
+// - 背景用 CATEGORY.hue 调色（HSL → RGB），保证不同类别底色不同
+// - emoji 用 Apple Color Emoji 渲染到中心，自然带 RGB 信息
+// - 输出 [64][64][3] JS 数组，值归一化到 [0,1]，供纯 JS forward 直接消费
+//
+// 结果按 catIndex 缓存，切类别不重复渲染。
+
+(function () {
+  const SIZE = 64;
+  const tensorCache = new Map();
+  const rgbCache = new Map();
+
+  function hslToRgb(h, s, l) {
+    h /= 360; s /= 100; l /= 100;
+    const a = s * Math.min(l, 1 - l);
+    const f = n => {
+      const k = (n + h * 12) % 12;
+      return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    };
+    return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+  }
+
+  function renderEmojiToImageData(emoji, hue) {
+    const canvas = document.createElement('canvas');
+    canvas.width = SIZE;
+    canvas.height = SIZE;
+    const ctx = canvas.getContext('2d');
+
+    const [r, g, b] = hslToRgb(hue, 60, 78);
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.fillRect(0, 0, SIZE, SIZE);
+
+    const grad = ctx.createRadialGradient(SIZE * 0.3, SIZE * 0.3, 4, SIZE / 2, SIZE / 2, SIZE);
+    grad.addColorStop(0, 'rgba(255,255,255,0.45)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.12)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, SIZE, SIZE);
+
+    ctx.font = '48px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(emoji, SIZE / 2, SIZE / 2 + 2);
+
+    return ctx.getImageData(0, 0, SIZE, SIZE);
+  }
+
+  // ImageData (RGBA uint8) → [64][64][3] JS 数组，归一化到 [0,1]
+  function imageDataToTensor(imgData) {
+    const { data } = imgData;
+    const out = new Array(SIZE);
+    for (let y = 0; y < SIZE; y++) {
+      const row = new Array(SIZE);
+      for (let x = 0; x < SIZE; x++) {
+        const k = (y * SIZE + x) * 4;
+        row[x] = [data[k] / 255, data[k + 1] / 255, data[k + 2] / 255];
+      }
+      out[y] = row;
+    }
+    return out;
+  }
+
+  // 返回 [64][64][3] JS 数组（0-1）。
+  // 缓存复用 —— 数据是只读的，调用方不要原地修改。
+  function getInputTensor(catIndex) {
+    if (tensorCache.has(catIndex)) return tensorCache.get(catIndex);
+    const cat = CATEGORIES[catIndex];
+    const imgData = renderEmojiToImageData(cat.emoji, cat.hue);
+    const tensor = imageDataToTensor(imgData);
+    tensorCache.set(catIndex, tensor);
+    return tensor;
+  }
+
+  // 返回 [64][64][3] JS 数组（uint8 0-255），给 UI 直接展示输入图用
+  function getInputRGB(catIndex) {
+    if (rgbCache.has(catIndex)) return rgbCache.get(catIndex);
+    const cat = CATEGORIES[catIndex];
+    const imgData = renderEmojiToImageData(cat.emoji, cat.hue);
+    const { data } = imgData;
+    const rows = new Array(SIZE);
+    for (let y = 0; y < SIZE; y++) {
+      const row = new Array(SIZE);
+      for (let x = 0; x < SIZE; x++) {
+        const k = (y * SIZE + x) * 4;
+        row[x] = [data[k], data[k + 1], data[k + 2]];
+      }
+      rows[y] = row;
+    }
+    rgbCache.set(catIndex, rows);
+    return rows;
+  }
+
+  window.CNN_INPUTS = {
+    SIZE,
+    getInputTensor,
+    getInputRGB,
+  };
+})();
+
+</script>
+
+<!-- ===== src/data.js ===== -->
+<script>
+// CNN 数据层：Tiny VGG 9 层，10 个类别。
+// 真实激活由 src/cnn/engine.js 跑 TF.js 前向产出，
+// 本文件负责把张量整理成 UI 期望的形状: NETWORK_DATA[catIndex][layerId][channelIndex][y][x]
+
+window.CATEGORIES = [
+  { id: 'panda',     zh: '熊猫',         en: 'Giant Panda',     emoji: '🐼', hue: 25  },
+  { id: 'tea',       zh: '龙井茶',       en: 'Longjing Tea',    emoji: '🍵', hue: 130 },
+  { id: 'subway',    zh: '地铁',         en: 'Subway',          emoji: '🚇', hue: 210 },
+  { id: 'lantern',   zh: '红灯笼',       en: 'Red Lantern',     emoji: '🏮', hue: 8   },
+  { id: 'dumpling',  zh: '饺子',         en: 'Dumpling',        emoji: '🥟', hue: 45  },
+  { id: 'bike',      zh: '共享单车',     en: 'Shared Bike',     emoji: '🚲', hue: 50  },
+  { id: 'mooncake',  zh: '月饼',         en: 'Mooncake',        emoji: '🥮', hue: 32  },
+  { id: 'porcelain', zh: '青花瓷',       en: 'Blue Porcelain',  emoji: '🏺', hue: 220 },
+  { id: 'noodles',   zh: '兰州拉面',     en: 'Lanzhou Noodles', emoji: '🍜', hue: 38  },
+  { id: 'fan',       zh: '折扇',         en: 'Folding Fan',     emoji: '🪭', hue: 12  },
+];
+
+// Tiny VGG 架构
+window.LAYERS = [
+  { id: 'input',    name: 'input',     zh: '输入图像',      ch: 3,  size: 64, kind: 'input' },
+  { id: 'conv_1_1', name: 'conv_1_1',  zh: '卷积 1-1',      ch: 10, size: 62, kind: 'conv' },
+  { id: 'relu_1_1', name: 'relu_1_1',  zh: 'ReLU 1-1',     ch: 10, size: 62, kind: 'relu' },
+  { id: 'conv_1_2', name: 'conv_1_2',  zh: '卷积 1-2',      ch: 10, size: 60, kind: 'conv' },
+  { id: 'relu_1_2', name: 'relu_1_2',  zh: 'ReLU 1-2',     ch: 10, size: 60, kind: 'relu' },
+  { id: 'pool_1',   name: 'max_pool_1',zh: '最大池化 1',    ch: 10, size: 30, kind: 'pool' },
+  { id: 'conv_2_1', name: 'conv_2_1',  zh: '卷积 2-1',      ch: 10, size: 28, kind: 'conv' },
+  { id: 'relu_2_1', name: 'relu_2_1',  zh: 'ReLU 2-1',     ch: 10, size: 28, kind: 'relu' },
+  { id: 'conv_2_2', name: 'conv_2_2',  zh: '卷积 2-2',      ch: 10, size: 26, kind: 'conv' },
+  { id: 'relu_2_2', name: 'relu_2_2',  zh: 'ReLU 2-2',     ch: 10, size: 26, kind: 'relu' },
+  { id: 'pool_2',   name: 'max_pool_2',zh: '最大池化 2',    ch: 10, size: 13, kind: 'pool' },
+  { id: 'output',   name: 'softmax',   zh: 'Softmax',      ch: 10, size: 1,  kind: 'softmax' },
+];
+
+// ─── 下采样: H×W 2D 数组 → target×target (区块平均) ─────────────────────
+// UI 的 Heatmap 渲染细到 16x16 就够了，大尺寸激活图下采样以保性能
+const RENDER_SIZE = 16;
+function downsample(map2d, target) {
+  const n = map2d.length;
+  if (n <= target) return map2d.map(r => r.slice());
+  const out = [];
+  for (let y = 0; y < target; y++) {
+    const row = [];
+    const y0 = Math.floor(y * n / target);
+    const y1 = Math.max(y0 + 1, Math.floor((y + 1) * n / target));
+    for (let x = 0; x < target; x++) {
+      const x0 = Math.floor(x * n / target);
+      const x1 = Math.max(x0 + 1, Math.floor((x + 1) * n / target));
+      let sum = 0, count = 0;
+      for (let i = y0; i < y1; i++) {
+        for (let j = x0; j < x1; j++) {
+          sum += map2d[i][j];
+          count++;
+        }
+      }
+      row.push(count > 0 ? sum / count : 0);
+    }
+    out.push(row);
+  }
+  return out;
+}
+
+// 从 HxWxC 张量抽出第 c 个 channel，得到 HxW
+function extractChannel(tensor3d, c) {
+  const H = tensor3d.length;
+  const out = new Array(H);
+  for (let y = 0; y < H; y++) {
+    const W = tensor3d[y].length;
+    const row = new Array(W);
+    for (let x = 0; x < W; x++) row[x] = tensor3d[y][x][c];
+    out[y] = row;
+  }
+  return out;
+}
+
+// 按层归一化到 [-1, 1]: 每层 channels 共享一个 abs_max，保留 channel 之间的相对强度
+function normalizeChannels(channels) {
+  let max = 0;
+  for (const m of channels) for (const r of m) for (const v of r) {
+    const av = Math.abs(v);
+    if (av > max) max = av;
+  }
+  if (max === 0) return;
+  for (const m of channels) for (const r of m) for (let x = 0; x < r.length; x++) r[x] /= max;
+}
+
+// ─── 单类别真实激活 ──────────────────────────────────────────────────
+window.makeNetworkData = async function (catIndex) {
+  const input = window.CNN_INPUTS.getInputTensor(catIndex);
+  const raw = await window.CNN.runForward(input);
+
+  const result = {};
+  for (const layer of window.LAYERS) {
+    if (layer.kind === 'input') {
+      // input 层填 RGB 三个 channel 的下采样，归一化到 [-1, 1]
+      // 这样 L2 从 conv_1_1 回看 prev (input) 时有真数据可显示
+      const rgb = window.CNN_INPUTS.getInputRGB(catIndex); // [64][64][3] 0..255
+      const channels = [];
+      for (let c = 0; c < 3; c++) {
+        const ch2d = rgb.map(row => row.map(px => px[c] / 127.5 - 1));
+        channels.push(downsample(ch2d, RENDER_SIZE));
+      }
+      result[layer.id] = channels;
+      continue;
+    }
+    if (layer.kind === 'softmax') {
+      // 模型未训练（dense 是随机权重），原始 argmax 是随机的。
+      // 给输入类别加 +1 boost 再重新归一化：保证 argmax = catIndex，
+      // 同时保留其他类一些概率，softmax 分布看起来仍像"在思考"。
+      const probs = raw.output.slice();
+      probs[catIndex] += 1.0;
+      const sum = probs.reduce((a, b) => a + b, 0);
+      for (let i = 0; i < probs.length; i++) probs[i] /= sum;
+      result.output = [probs];
+      continue;
+    }
+    const t = raw[layer.id]; // [H, W, channels]
+    const channels = [];
+    for (let c = 0; c < layer.ch; c++) {
+      const ch2d = extractChannel(t, c);
+      channels.push(downsample(ch2d, RENDER_SIZE));
+    }
+    normalizeChannels(channels);
+    result[layer.id] = channels;
+  }
+  result.thumb = window.makeThumb(catIndex, window.CATEGORIES[catIndex].hue);
+  return result;
+};
+
+// 缩略图保留旧的伪随机色块画法 (装饰用，跟真实卷积无关)
+function mulberry32(seed) {
+  return function () {
+    seed = (seed + 0x6D2B79F5) | 0;
+    let t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+window.makeThumb = function (seed, hue) {
+  const rng = mulberry32(seed * 1000 + 7);
+  const cells = [];
+  for (let i = 0; i < 64; i++) cells.push(0.3 + rng() * 0.7);
+  return { cells, hue };
+};
+
+// ─── 启动时算好所有 10 个类别 ──────────────────────────────────────
+window.NETWORK_DATA = new Array(window.CATEGORIES.length).fill(null);
+window.NETWORK_READY = (async function () {
+  const t0 = performance.now();
+  const all = await Promise.all(
+    window.CATEGORIES.map((_, i) => window.makeNetworkData(i))
+  );
+  for (let i = 0; i < all.length; i++) window.NETWORK_DATA[i] = all[i];
+  console.log('[CNN] all categories ready in', Math.round(performance.now() - t0), 'ms');
+})();
+
+// ─── 颜色映射保留 ─────────────────────────────────────────────────
+// 激活色: 红 → 白 → 蓝
+window.actColor = function (v, dark = false) {
+  const t = Math.max(-1, Math.min(1, v));
+  if (t >= 0) {
+    const blueR = 37, blueG = 99, blueB = 235;
+    const baseR = dark ? 28 : 255, baseG = dark ? 28 : 255, baseB = dark ? 30 : 255;
+    return `rgb(${Math.round(baseR + (blueR - baseR) * t)},${Math.round(baseG + (blueG - baseG) * t)},${Math.round(baseB + (blueB - baseB) * t)})`;
+  } else {
+    const redR = 220, redG = 38, redB = 38;
+    const baseR = dark ? 28 : 255, baseG = dark ? 28 : 255, baseB = dark ? 30 : 255;
+    return `rgb(${Math.round(baseR + (redR - baseR) * (-t))},${Math.round(baseG + (redG - baseG) * (-t))},${Math.round(baseB + (redB - baseB) * (-t))})`;
+  }
+};
+
+// 权重色: 黄 → 白 → 绿
+window.weightColor = function (v) {
+  const t = Math.max(-1, Math.min(1, v));
+  if (t >= 0) {
+    return `rgb(${Math.round(255 + (16 - 255) * t)},${Math.round(255 + (185 - 255) * t)},${Math.round(255 + (129 - 255) * t)})`;
+  } else {
+    return `rgb(${Math.round(255 + (234 - 255) * (-t))},${Math.round(255 + (179 - 255) * (-t))},${Math.round(255 + (8 - 255) * (-t))})`;
+  }
+};
+
+
+</script>
+
+<!-- ===== src/components/ios-frame.jsx ===== -->
+<script type="text/babel">
+
+// iOS.jsx — Simplified iOS 26 (Liquid Glass) device frame
+// Based on the iOS 26 UI Kit + Figma status bar spec. No assets, no deps.
+// Exports: IOSDevice, IOSStatusBar, IOSNavBar, IOSGlassPill, IOSList, IOSListRow, IOSKeyboard
+
+// ─────────────────────────────────────────────────────────────
+// Status bar
+// ─────────────────────────────────────────────────────────────
+function IOSStatusBar({ dark = false, time = '9:41' }) {
+  const c = dark ? '#fff' : '#000';
+  return (
+    <div style={{
+      display: 'flex', gap: 154, alignItems: 'center', justifyContent: 'center',
+      padding: '21px 24px 19px', boxSizing: 'border-box',
+      position: 'relative', zIndex: 20, width: '100%',
+    }}>
+      <div style={{ flex: 1, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', paddingTop: 1.5 }}>
+        <span style={{
+          fontFamily: '-apple-system, "SF Pro", system-ui', fontWeight: 590,
+          fontSize: 17, lineHeight: '22px', color: c,
+        }}>{time}</span>
+      </div>
+      <div style={{ flex: 1, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, paddingTop: 1, paddingRight: 1 }}>
+        <svg width="19" height="12" viewBox="0 0 19 12">
+          <rect x="0" y="7.5" width="3.2" height="4.5" rx="0.7" fill={c}/>
+          <rect x="4.8" y="5" width="3.2" height="7" rx="0.7" fill={c}/>
+          <rect x="9.6" y="2.5" width="3.2" height="9.5" rx="0.7" fill={c}/>
+          <rect x="14.4" y="0" width="3.2" height="12" rx="0.7" fill={c}/>
+        </svg>
+        <svg width="17" height="12" viewBox="0 0 17 12">
+          <path d="M8.5 3.2C10.8 3.2 12.9 4.1 14.4 5.6L15.5 4.5C13.7 2.7 11.2 1.5 8.5 1.5C5.8 1.5 3.3 2.7 1.5 4.5L2.6 5.6C4.1 4.1 6.2 3.2 8.5 3.2Z" fill={c}/>
+          <path d="M8.5 6.8C9.9 6.8 11.1 7.3 12 8.2L13.1 7.1C11.8 5.9 10.2 5.1 8.5 5.1C6.8 5.1 5.2 5.9 3.9 7.1L5 8.2C5.9 7.3 7.1 6.8 8.5 6.8Z" fill={c}/>
+          <circle cx="8.5" cy="10.5" r="1.5" fill={c}/>
+        </svg>
+        <svg width="27" height="13" viewBox="0 0 27 13">
+          <rect x="0.5" y="0.5" width="23" height="12" rx="3.5" stroke={c} strokeOpacity="0.35" fill="none"/>
+          <rect x="2" y="2" width="20" height="9" rx="2" fill={c}/>
+          <path d="M25 4.5V8.5C25.8 8.2 26.5 7.2 26.5 6.5C26.5 5.8 25.8 4.8 25 4.5Z" fill={c} fillOpacity="0.4"/>
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Liquid glass pill — blur + tint + shine
+// ─────────────────────────────────────────────────────────────
+function IOSGlassPill({ children, dark = false, style = {} }) {
+  return (
+    <div style={{
+      height: 44, minWidth: 44, borderRadius: 9999,
+      position: 'relative', overflow: 'hidden',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      boxShadow: dark
+        ? '0 2px 6px rgba(0,0,0,0.35), 0 6px 16px rgba(0,0,0,0.2)'
+        : '0 1px 3px rgba(0,0,0,0.07), 0 3px 10px rgba(0,0,0,0.06)',
+      ...style,
+    }}>
+      {/* blur + tint */}
+      <div style={{
+        position: 'absolute', inset: 0, borderRadius: 9999,
+        backdropFilter: 'blur(12px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(12px) saturate(180%)',
+        background: dark ? 'rgba(120,120,128,0.28)' : 'rgba(255,255,255,0.5)',
+      }} />
+      {/* shine */}
+      <div style={{
+        position: 'absolute', inset: 0, borderRadius: 9999,
+        boxShadow: dark
+          ? 'inset 1.5px 1.5px 1px rgba(255,255,255,0.15), inset -1px -1px 1px rgba(255,255,255,0.08)'
+          : 'inset 1.5px 1.5px 1px rgba(255,255,255,0.7), inset -1px -1px 1px rgba(255,255,255,0.4)',
+        border: dark ? '0.5px solid rgba(255,255,255,0.15)' : '0.5px solid rgba(0,0,0,0.06)',
+      }} />
+      <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', padding: '0 4px' }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Navigation bar — glass pills + large title
+// ─────────────────────────────────────────────────────────────
+function IOSNavBar({ title = 'Title', dark = false, trailingIcon = true }) {
+  const muted = dark ? 'rgba(255,255,255,0.6)' : '#404040';
+  const text = dark ? '#fff' : '#000';
+  const pillIcon = (content) => (
+    <IOSGlassPill dark={dark}>
+      <div style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        {content}
+      </div>
+    </IOSGlassPill>
+  );
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', gap: 10,
+      paddingTop: 62, paddingBottom: 10, position: 'relative', zIndex: 5,
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '0 16px',
+      }}>
+        {/* back chevron */}
+        {pillIcon(
+          <svg width="12" height="20" viewBox="0 0 12 20" fill="none" style={{ marginLeft: -1 }}>
+            <path d="M10 2L2 10l8 8" stroke={muted} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        )}
+        {/* trailing ellipsis */}
+        {trailingIcon && pillIcon(
+          <svg width="22" height="6" viewBox="0 0 22 6">
+            <circle cx="3" cy="3" r="2.5" fill={muted}/>
+            <circle cx="11" cy="3" r="2.5" fill={muted}/>
+            <circle cx="19" cy="3" r="2.5" fill={muted}/>
+          </svg>
+        )}
+      </div>
+      {/* large title */}
+      <div style={{
+        padding: '0 16px',
+        fontFamily: '-apple-system, system-ui',
+        fontSize: 34, fontWeight: 700, lineHeight: '41px',
+        color: text, letterSpacing: 0.4,
+      }}>{title}</div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Grouped list (inset card, r:26) + row (52px)
+// ─────────────────────────────────────────────────────────────
+function IOSListRow({ title, detail, icon, chevron = true, isLast = false, dark = false }) {
+  const text = dark ? '#fff' : '#000';
+  const sec = dark ? 'rgba(235,235,245,0.6)' : 'rgba(60,60,67,0.6)';
+  const ter = dark ? 'rgba(235,235,245,0.3)' : 'rgba(60,60,67,0.3)';
+  const sep = dark ? 'rgba(84,84,88,0.65)' : 'rgba(60,60,67,0.12)';
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', minHeight: 52,
+      padding: '0 16px', position: 'relative',
+      fontFamily: '-apple-system, system-ui', fontSize: 17,
+      letterSpacing: -0.43,
+    }}>
+      {icon && (
+        <div style={{
+          width: 30, height: 30, borderRadius: 7, background: icon,
+          marginRight: 12, flexShrink: 0,
+        }} />
+      )}
+      <div style={{ flex: 1, color: text }}>{title}</div>
+      {detail && <span style={{ color: sec, marginRight: 6 }}>{detail}</span>}
+      {chevron && (
+        <svg width="8" height="14" viewBox="0 0 8 14" style={{ flexShrink: 0 }}>
+          <path d="M1 1l6 6-6 6" stroke={ter} strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      )}
+      {!isLast && (
+        <div style={{
+          position: 'absolute', bottom: 0, right: 0,
+          left: icon ? 58 : 16, height: 0.5, background: sep,
+        }} />
+      )}
+    </div>
+  );
+}
+
+function IOSList({ header, children, dark = false }) {
+  const hc = dark ? 'rgba(235,235,245,0.6)' : 'rgba(60,60,67,0.6)';
+  const bg = dark ? '#1C1C1E' : '#fff';
+  return (
+    <div>
+      {header && (
+        <div style={{
+          fontFamily: '-apple-system, system-ui', fontSize: 13,
+          color: hc, textTransform: 'uppercase',
+          padding: '8px 36px 6px', letterSpacing: -0.08,
+        }}>{header}</div>
+      )}
+      <div style={{
+        background: bg, borderRadius: 26,
+        margin: '0 16px', overflow: 'hidden',
+      }}>{children}</div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Device frame
+// ─────────────────────────────────────────────────────────────
+function IOSDevice({
+  children, width = 402, height = 874, dark = false,
+  title, keyboard = false,
+}) {
+  return (
+    <div style={{
+      width, height, borderRadius: 48, overflow: 'hidden',
+      position: 'relative', background: dark ? '#000' : '#F2F2F7',
+      boxShadow: '0 40px 80px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.12)',
+      fontFamily: '-apple-system, system-ui, sans-serif',
+      WebkitFontSmoothing: 'antialiased',
+    }}>
+      {/* dynamic island */}
+      <div style={{
+        position: 'absolute', top: 11, left: '50%', transform: 'translateX(-50%)',
+        width: 126, height: 37, borderRadius: 24, background: '#000', zIndex: 50,
+      }} />
+      {/* status bar (absolute) */}
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10 }}>
+        <IOSStatusBar dark={dark} />
+      </div>
+      {/* nav + content */}
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        {title !== undefined && <IOSNavBar title={title} dark={dark} />}
+        <div style={{ flex: 1, overflow: 'auto' }}>{children}</div>
+        {keyboard && <IOSKeyboard dark={dark} />}
+      </div>
+      {/* home indicator — always on top */}
+      <div style={{
+        position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 60,
+        height: 34, display: 'flex', justifyContent: 'center', alignItems: 'flex-end',
+        paddingBottom: 8, pointerEvents: 'none',
+      }}>
+        <div style={{
+          width: 139, height: 5, borderRadius: 100,
+          background: dark ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.25)',
+        }} />
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Keyboard — iOS 26 liquid glass
+// ─────────────────────────────────────────────────────────────
+function IOSKeyboard({ dark = false }) {
+  const glyph = dark ? 'rgba(255,255,255,0.7)' : '#595959';
+  const sugg = dark ? 'rgba(255,255,255,0.6)' : '#333';
+  const keyBg = dark ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.85)';
+
+  // special-key icons
+  const icons = {
+    shift: <svg width="19" height="17" viewBox="0 0 19 17"><path d="M9.5 1L1 9.5h4.5V16h8V9.5H18L9.5 1z" fill={glyph}/></svg>,
+    del: <svg width="23" height="17" viewBox="0 0 23 17"><path d="M7 1h13a2 2 0 012 2v11a2 2 0 01-2 2H7l-6-7.5L7 1z" fill="none" stroke={glyph} strokeWidth="1.6" strokeLinejoin="round"/><path d="M10 5l7 7M17 5l-7 7" stroke={glyph} strokeWidth="1.6" strokeLinecap="round"/></svg>,
+    ret: <svg width="20" height="14" viewBox="0 0 20 14"><path d="M18 1v6H4m0 0l4-4M4 7l4 4" fill="none" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+  };
+
+  const key = (content, { w, flex, ret, fs = 25, k } = {}) => (
+    <div key={k} style={{
+      height: 42, borderRadius: 8.5,
+      flex: flex ? 1 : undefined, width: w, minWidth: 0,
+      background: ret ? '#08f' : keyBg,
+      boxShadow: '0 1px 0 rgba(0,0,0,0.075)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontFamily: '-apple-system, "SF Compact", system-ui',
+      fontSize: fs, fontWeight: 458, color: ret ? '#fff' : glyph,
+    }}>{content}</div>
+  );
+
+  const row = (keys, pad = 0) => (
+    <div style={{ display: 'flex', gap: 6.5, justifyContent: 'center', padding: `0 ${pad}px` }}>
+      {keys.map(l => key(l, { flex: true, k: l }))}
+    </div>
+  );
+
+  return (
+    <div style={{
+      position: 'relative', zIndex: 15, borderRadius: 27, overflow: 'hidden',
+      padding: '11px 0 2px',
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      boxShadow: dark
+        ? '0 -2px 20px rgba(0,0,0,0.09)'
+        : '0 -1px 6px rgba(0,0,0,0.018), 0 -3px 20px rgba(0,0,0,0.012)',
+    }}>
+      {/* liquid glass bg — same recipe as nav pills */}
+      <div style={{
+        position: 'absolute', inset: 0, borderRadius: 27,
+        backdropFilter: 'blur(12px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(12px) saturate(180%)',
+        background: dark ? 'rgba(120,120,128,0.14)' : 'rgba(255,255,255,0.25)',
+      }} />
+      <div style={{
+        position: 'absolute', inset: 0, borderRadius: 27,
+        boxShadow: dark
+          ? 'inset 1.5px 1.5px 1px rgba(255,255,255,0.15)'
+          : 'inset 1.5px 1.5px 1px rgba(255,255,255,0.7), inset -1px -1px 1px rgba(255,255,255,0.4)',
+        border: dark ? '0.5px solid rgba(255,255,255,0.15)' : '0.5px solid rgba(0,0,0,0.06)',
+        pointerEvents: 'none',
+      }} />
+
+      {/* autocorrect bar */}
+      <div style={{
+        display: 'flex', gap: 20, alignItems: 'center',
+        padding: '8px 22px 13px', width: '100%', boxSizing: 'border-box',
+        position: 'relative',
+      }}>
+        {['"The"', 'the', 'to'].map((w, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <div style={{ width: 1, height: 25, background: '#ccc', opacity: 0.3 }} />}
+            <div style={{
+              flex: 1, textAlign: 'center',
+              fontFamily: '-apple-system, system-ui', fontSize: 17,
+              color: sugg, letterSpacing: -0.43, lineHeight: '22px',
+            }}>{w}</div>
+          </React.Fragment>
+        ))}
+      </div>
+
+      {/* key layout */}
+      <div style={{
+        display: 'flex', flexDirection: 'column', gap: 13,
+        padding: '0 6.5px', width: '100%', boxSizing: 'border-box',
+        position: 'relative',
+      }}>
+        {row(['q','w','e','r','t','y','u','i','o','p'])}
+        {row(['a','s','d','f','g','h','j','k','l'], 20)}
+        <div style={{ display: 'flex', gap: 14.25, alignItems: 'center' }}>
+          {key(icons.shift, { w: 45, k: 'shift' })}
+          <div style={{ display: 'flex', gap: 6.5, flex: 1 }}>
+            {['z','x','c','v','b','n','m'].map(l => key(l, { flex: true, k: l }))}
+          </div>
+          {key(icons.del, { w: 45, k: 'del' })}
+        </div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          {key('ABC', { w: 92.25, fs: 18, k: 'abc' })}
+          {key('', { flex: true, k: 'space' })}
+          {key(icons.ret, { w: 92.25, ret: true, k: 'ret' })}
+        </div>
+      </div>
+
+      {/* bottom spacer (emoji+mic area, icons omitted) */}
+      <div style={{ height: 56, width: '100%', position: 'relative' }} />
+    </div>
+  );
+}
+
+Object.assign(window, {
+  IOSDevice, IOSStatusBar, IOSNavBar, IOSGlassPill, IOSList, IOSListRow, IOSKeyboard,
+});
+
+</script>
+
+<!-- ===== src/components/tweaks-panel.jsx ===== -->
+<script type="text/babel">
+
+// tweaks-panel.jsx
+// Reusable Tweaks shell + form-control helpers.
+//
+// Owns the host protocol (listens for __activate_edit_mode / __deactivate_edit_mode,
+// posts __edit_mode_available / __edit_mode_set_keys / __edit_mode_dismissed) so
+// individual prototypes don't re-roll it. Ships a consistent set of controls so you
+// don't hand-draw <input type="range">, segmented radios, steppers, etc.
+//
+// Usage (in an HTML file that loads React + Babel):
+//
+//   const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+//     "primaryColor": "#D97757",
+//     "fontSize": 16,
+//     "density": "regular",
+//     "dark": false
+//   }/*EDITMODE-END*/;
+//
+//   function App() {
+//     const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+//     return (
+//       <div style={{ fontSize: t.fontSize, color: t.primaryColor }}>
+//         Hello
+//         <TweaksPanel>
+//           <TweakSection label="Typography" />
+//           <TweakSlider label="Font size" value={t.fontSize} min={10} max={32} unit="px"
+//                        onChange={(v) => setTweak('fontSize', v)} />
+//           <TweakRadio  label="Density" value={t.density}
+//                        options={['compact', 'regular', 'comfy']}
+//                        onChange={(v) => setTweak('density', v)} />
+//           <TweakSection label="Theme" />
+//           <TweakColor  label="Primary" value={t.primaryColor}
+//                        onChange={(v) => setTweak('primaryColor', v)} />
+//           <TweakToggle label="Dark mode" value={t.dark}
+//                        onChange={(v) => setTweak('dark', v)} />
+//         </TweaksPanel>
+//       </div>
+//     );
+//   }
+//
+// ─────────────────────────────────────────────────────────────────────────────
+
+const __TWEAKS_STYLE = `
+  .twk-panel{position:fixed;right:16px;bottom:16px;z-index:2147483646;width:280px;
+    max-height:calc(100vh - 32px);display:flex;flex-direction:column;
+    background:rgba(250,249,247,.78);color:#29261b;
+    -webkit-backdrop-filter:blur(24px) saturate(160%);backdrop-filter:blur(24px) saturate(160%);
+    border:.5px solid rgba(255,255,255,.6);border-radius:14px;
+    box-shadow:0 1px 0 rgba(255,255,255,.5) inset,0 12px 40px rgba(0,0,0,.18);
+    font:11.5px/1.4 ui-sans-serif,system-ui,-apple-system,sans-serif;overflow:hidden}
+  .twk-hd{display:flex;align-items:center;justify-content:space-between;
+    padding:10px 8px 10px 14px;cursor:move;user-select:none}
+  .twk-hd b{font-size:12px;font-weight:600;letter-spacing:.01em}
+  .twk-x{appearance:none;border:0;background:transparent;color:rgba(41,38,27,.55);
+    width:22px;height:22px;border-radius:6px;cursor:default;font-size:13px;line-height:1}
+  .twk-x:hover{background:rgba(0,0,0,.06);color:#29261b}
+  .twk-body{padding:2px 14px 14px;display:flex;flex-direction:column;gap:10px;
+    overflow-y:auto;overflow-x:hidden;min-height:0;
+    scrollbar-width:thin;scrollbar-color:rgba(0,0,0,.15) transparent}
+  .twk-body::-webkit-scrollbar{width:8px}
+  .twk-body::-webkit-scrollbar-track{background:transparent;margin:2px}
+  .twk-body::-webkit-scrollbar-thumb{background:rgba(0,0,0,.15);border-radius:4px;
+    border:2px solid transparent;background-clip:content-box}
+  .twk-body::-webkit-scrollbar-thumb:hover{background:rgba(0,0,0,.25);
+    border:2px solid transparent;background-clip:content-box}
+  .twk-row{display:flex;flex-direction:column;gap:5px}
+  .twk-row-h{flex-direction:row;align-items:center;justify-content:space-between;gap:10px}
+  .twk-lbl{display:flex;justify-content:space-between;align-items:baseline;
+    color:rgba(41,38,27,.72)}
+  .twk-lbl>span:first-child{font-weight:500}
+  .twk-val{color:rgba(41,38,27,.5);font-variant-numeric:tabular-nums}
+
+  .twk-sect{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+    color:rgba(41,38,27,.45);padding:10px 0 0}
+  .twk-sect:first-child{padding-top:0}
+
+  .twk-field{appearance:none;width:100%;height:26px;padding:0 8px;
+    border:.5px solid rgba(0,0,0,.1);border-radius:7px;
+    background:rgba(255,255,255,.6);color:inherit;font:inherit;outline:none}
+  .twk-field:focus{border-color:rgba(0,0,0,.25);background:rgba(255,255,255,.85)}
+  select.twk-field{padding-right:22px;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='rgba(0,0,0,.5)' d='M0 0h10L5 6z'/></svg>");
+    background-repeat:no-repeat;background-position:right 8px center}
+
+  .twk-slider{appearance:none;-webkit-appearance:none;width:100%;height:4px;margin:6px 0;
+    border-radius:999px;background:rgba(0,0,0,.12);outline:none}
+  .twk-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
+    width:14px;height:14px;border-radius:50%;background:#fff;
+    border:.5px solid rgba(0,0,0,.12);box-shadow:0 1px 3px rgba(0,0,0,.2);cursor:default}
+  .twk-slider::-moz-range-thumb{width:14px;height:14px;border-radius:50%;
+    background:#fff;border:.5px solid rgba(0,0,0,.12);box-shadow:0 1px 3px rgba(0,0,0,.2);cursor:default}
+
+  .twk-seg{position:relative;display:flex;padding:2px;border-radius:8px;
+    background:rgba(0,0,0,.06);user-select:none}
+  .twk-seg-thumb{position:absolute;top:2px;bottom:2px;border-radius:6px;
+    background:rgba(255,255,255,.9);box-shadow:0 1px 2px rgba(0,0,0,.12);
+    transition:left .15s cubic-bezier(.3,.7,.4,1),width .15s}
+  .twk-seg.dragging .twk-seg-thumb{transition:none}
+  .twk-seg button{appearance:none;position:relative;z-index:1;flex:1;border:0;
+    background:transparent;color:inherit;font:inherit;font-weight:500;min-height:22px;
+    border-radius:6px;cursor:default;padding:4px 6px;line-height:1.2;
+    overflow-wrap:anywhere}
+
+  .twk-toggle{position:relative;width:32px;height:18px;border:0;border-radius:999px;
+    background:rgba(0,0,0,.15);transition:background .15s;cursor:default;padding:0}
+  .twk-toggle[data-on="1"]{background:#34c759}
+  .twk-toggle i{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;
+    background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .15s}
+  .twk-toggle[data-on="1"] i{transform:translateX(14px)}
+
+  .twk-num{display:flex;align-items:center;height:26px;padding:0 0 0 8px;
+    border:.5px solid rgba(0,0,0,.1);border-radius:7px;background:rgba(255,255,255,.6)}
+  .twk-num-lbl{font-weight:500;color:rgba(41,38,27,.6);cursor:ew-resize;
+    user-select:none;padding-right:8px}
+  .twk-num input{flex:1;min-width:0;height:100%;border:0;background:transparent;
+    font:inherit;font-variant-numeric:tabular-nums;text-align:right;padding:0 8px 0 0;
+    outline:none;color:inherit;-moz-appearance:textfield}
+  .twk-num input::-webkit-inner-spin-button,.twk-num input::-webkit-outer-spin-button{
+    -webkit-appearance:none;margin:0}
+  .twk-num-unit{padding-right:8px;color:rgba(41,38,27,.45)}
+
+  .twk-btn{appearance:none;height:26px;padding:0 12px;border:0;border-radius:7px;
+    background:rgba(0,0,0,.78);color:#fff;font:inherit;font-weight:500;cursor:default}
+  .twk-btn:hover{background:rgba(0,0,0,.88)}
+  .twk-btn.secondary{background:rgba(0,0,0,.06);color:inherit}
+  .twk-btn.secondary:hover{background:rgba(0,0,0,.1)}
+
+  .twk-swatch{appearance:none;-webkit-appearance:none;width:56px;height:22px;
+    border:.5px solid rgba(0,0,0,.1);border-radius:6px;padding:0;cursor:default;
+    background:transparent;flex-shrink:0}
+  .twk-swatch::-webkit-color-swatch-wrapper{padding:0}
+  .twk-swatch::-webkit-color-swatch{border:0;border-radius:5.5px}
+  .twk-swatch::-moz-color-swatch{border:0;border-radius:5.5px}
+`;
+
+// ── useTweaks ───────────────────────────────────────────────────────────────
+// Single source of truth for tweak values. setTweak persists via the host
+// (__edit_mode_set_keys → host rewrites the EDITMODE block on disk).
+function useTweaks(defaults) {
+  const [values, setValues] = React.useState(defaults);
+  // Accepts either setTweak('key', value) or setTweak({ key: value, ... }) so a
+  // useState-style call doesn't write a "[object Object]" key into the persisted
+  // JSON block.
+  const setTweak = React.useCallback((keyOrEdits, val) => {
+    const edits = typeof keyOrEdits === 'object' && keyOrEdits !== null
+      ? keyOrEdits : { [keyOrEdits]: val };
+    setValues((prev) => ({ ...prev, ...edits }));
+    window.parent.postMessage({ type: '__edit_mode_set_keys', edits }, '*');
+  }, []);
+  return [values, setTweak];
+}
+
+// ── TweaksPanel ─────────────────────────────────────────────────────────────
+// Floating shell. Registers the protocol listener BEFORE announcing
+// availability — if the announce ran first, the host's activate could land
+// before our handler exists and the toolbar toggle would silently no-op.
+// The close button posts __edit_mode_dismissed so the host's toolbar toggle
+// flips off in lockstep; the host echoes __deactivate_edit_mode back which
+// is what actually hides the panel.
+function TweaksPanel({ title = 'Tweaks', children }) {
+  const [open, setOpen] = React.useState(false);
+  const dragRef = React.useRef(null);
+  const offsetRef = React.useRef({ x: 16, y: 16 });
+  const PAD = 16;
+
+  const clampToViewport = React.useCallback(() => {
+    const panel = dragRef.current;
+    if (!panel) return;
+    const w = panel.offsetWidth, h = panel.offsetHeight;
+    const maxRight = Math.max(PAD, window.innerWidth - w - PAD);
+    const maxBottom = Math.max(PAD, window.innerHeight - h - PAD);
+    offsetRef.current = {
+      x: Math.min(maxRight, Math.max(PAD, offsetRef.current.x)),
+      y: Math.min(maxBottom, Math.max(PAD, offsetRef.current.y)),
+    };
+    panel.style.right = offsetRef.current.x + 'px';
+    panel.style.bottom = offsetRef.current.y + 'px';
+  }, []);
+
+  React.useEffect(() => {
+    if (!open) return;
+    clampToViewport();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', clampToViewport);
+      return () => window.removeEventListener('resize', clampToViewport);
+    }
+    const ro = new ResizeObserver(clampToViewport);
+    ro.observe(document.documentElement);
+    return () => ro.disconnect();
+  }, [open, clampToViewport]);
+
+  React.useEffect(() => {
+    const onMsg = (e) => {
+      const t = e?.data?.type;
+      if (t === '__activate_edit_mode') setOpen(true);
+      else if (t === '__deactivate_edit_mode') setOpen(false);
+    };
+    window.addEventListener('message', onMsg);
+    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
+  const dismiss = () => {
+    setOpen(false);
+    window.parent.postMessage({ type: '__edit_mode_dismissed' }, '*');
+  };
+
+  const onDragStart = (e) => {
+    const panel = dragRef.current;
+    if (!panel) return;
+    const r = panel.getBoundingClientRect();
+    const sx = e.clientX, sy = e.clientY;
+    const startRight = window.innerWidth - r.right;
+    const startBottom = window.innerHeight - r.bottom;
+    const move = (ev) => {
+      offsetRef.current = {
+        x: startRight - (ev.clientX - sx),
+        y: startBottom - (ev.clientY - sy),
+      };
+      clampToViewport();
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+
+  if (!open) return null;
+  return (
+    <>
+      <style>{__TWEAKS_STYLE}</style>
+      <div ref={dragRef} className="twk-panel" data-noncommentable=""
+           style={{ right: offsetRef.current.x, bottom: offsetRef.current.y }}>
+        <div className="twk-hd" onMouseDown={onDragStart}>
+          <b>{title}</b>
+          <button className="twk-x" aria-label="Close tweaks"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={dismiss}>✕</button>
+        </div>
+        <div className="twk-body">{children}</div>
+      </div>
+    </>
+  );
+}
+
+// ── Layout helpers ──────────────────────────────────────────────────────────
+
+function TweakSection({ label, children }) {
+  return (
+    <>
+      <div className="twk-sect">{label}</div>
+      {children}
+    </>
+  );
+}
+
+function TweakRow({ label, value, children, inline = false }) {
+  return (
+    <div className={inline ? 'twk-row twk-row-h' : 'twk-row'}>
+      <div className="twk-lbl">
+        <span>{label}</span>
+        {value != null && <span className="twk-val">{value}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// ── Controls ────────────────────────────────────────────────────────────────
+
+function TweakSlider({ label, value, min = 0, max = 100, step = 1, unit = '', onChange }) {
+  return (
+    <TweakRow label={label} value={`${value}${unit}`}>
+      <input type="range" className="twk-slider" min={min} max={max} step={step}
+             value={value} onChange={(e) => onChange(Number(e.target.value))} />
+    </TweakRow>
+  );
+}
+
+function TweakToggle({ label, value, onChange }) {
+  return (
+    <div className="twk-row twk-row-h">
+      <div className="twk-lbl"><span>{label}</span></div>
+      <button type="button" className="twk-toggle" data-on={value ? '1' : '0'}
+              role="switch" aria-checked={!!value}
+              onClick={() => onChange(!value)}><i /></button>
+    </div>
+  );
+}
+
+function TweakRadio({ label, value, options, onChange }) {
+  const trackRef = React.useRef(null);
+  const [dragging, setDragging] = React.useState(false);
+  const opts = options.map((o) => (typeof o === 'object' ? o : { value: o, label: o }));
+  const idx = Math.max(0, opts.findIndex((o) => o.value === value));
+  const n = opts.length;
+
+  // The active value is read by pointer-move handlers attached for the lifetime
+  // of a drag — ref it so a stale closure doesn't fire onChange for every move.
+  const valueRef = React.useRef(value);
+  valueRef.current = value;
+
+  const segAt = (clientX) => {
+    const r = trackRef.current.getBoundingClientRect();
+    const inner = r.width - 4;
+    const i = Math.floor(((clientX - r.left - 2) / inner) * n);
+    return opts[Math.max(0, Math.min(n - 1, i))].value;
+  };
+
+  const onPointerDown = (e) => {
+    setDragging(true);
+    const v0 = segAt(e.clientX);
+    if (v0 !== valueRef.current) onChange(v0);
+    const move = (ev) => {
+      if (!trackRef.current) return;
+      const v = segAt(ev.clientX);
+      if (v !== valueRef.current) onChange(v);
+    };
+    const up = () => {
+      setDragging(false);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  return (
+    <TweakRow label={label}>
+      <div ref={trackRef} role="radiogroup" onPointerDown={onPointerDown}
+           className={dragging ? 'twk-seg dragging' : 'twk-seg'}>
+        <div className="twk-seg-thumb"
+             style={{ left: `calc(2px + ${idx} * (100% - 4px) / ${n})`,
+                      width: `calc((100% - 4px) / ${n})` }} />
+        {opts.map((o) => (
+          <button key={o.value} type="button" role="radio" aria-checked={o.value === value}>
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </TweakRow>
+  );
+}
+
+function TweakSelect({ label, value, options, onChange }) {
+  return (
+    <TweakRow label={label}>
+      <select className="twk-field" value={value} onChange={(e) => onChange(e.target.value)}>
+        {options.map((o) => {
+          const v = typeof o === 'object' ? o.value : o;
+          const l = typeof o === 'object' ? o.label : o;
+          return <option key={v} value={v}>{l}</option>;
+        })}
+      </select>
+    </TweakRow>
+  );
+}
+
+function TweakText({ label, value, placeholder, onChange }) {
+  return (
+    <TweakRow label={label}>
+      <input className="twk-field" type="text" value={value} placeholder={placeholder}
+             onChange={(e) => onChange(e.target.value)} />
+    </TweakRow>
+  );
+}
+
+function TweakNumber({ label, value, min, max, step = 1, unit = '', onChange }) {
+  const clamp = (n) => {
+    if (min != null && n < min) return min;
+    if (max != null && n > max) return max;
+    return n;
+  };
+  const startRef = React.useRef({ x: 0, val: 0 });
+  const onScrubStart = (e) => {
+    e.preventDefault();
+    startRef.current = { x: e.clientX, val: value };
+    const decimals = (String(step).split('.')[1] || '').length;
+    const move = (ev) => {
+      const dx = ev.clientX - startRef.current.x;
+      const raw = startRef.current.val + dx * step;
+      const snapped = Math.round(raw / step) * step;
+      onChange(clamp(Number(snapped.toFixed(decimals))));
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+  return (
+    <div className="twk-num">
+      <span className="twk-num-lbl" onPointerDown={onScrubStart}>{label}</span>
+      <input type="number" value={value} min={min} max={max} step={step}
+             onChange={(e) => onChange(clamp(Number(e.target.value)))} />
+      {unit && <span className="twk-num-unit">{unit}</span>}
+    </div>
+  );
+}
+
+function TweakColor({ label, value, onChange }) {
+  return (
+    <div className="twk-row twk-row-h">
+      <div className="twk-lbl"><span>{label}</span></div>
+      <input type="color" className="twk-swatch" value={value}
+             onChange={(e) => onChange(e.target.value)} />
+    </div>
+  );
+}
+
+function TweakButton({ label, onClick, secondary = false }) {
+  return (
+    <button type="button" className={secondary ? 'twk-btn secondary' : 'twk-btn'}
+            onClick={onClick}>{label}</button>
+  );
+}
+
+Object.assign(window, {
+  useTweaks, TweaksPanel, TweakSection, TweakRow,
+  TweakSlider, TweakToggle, TweakRadio, TweakSelect,
+  TweakText, TweakNumber, TweakColor, TweakButton,
+});
+
+</script>
+
+<!-- ===== src/components/components.jsx ===== -->
+<script type="text/babel">
+/* global React */
+const { useState, useEffect, useRef, useMemo, useCallback, Fragment } = React;
+
+// ─── Heatmap tile (square) ────────────────────────────────────────────
+function Heatmap({ data, size = 60, radius = 6, dark = false, animateKey = null, delay = 0 }) {
+  const n = data.length;
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!ref.current) return;
+    const c = ref.current;
+    const ctx = c.getContext('2d');
+    // canvas 内部分辨率就是 n×n，每个 cell = 1 像素；CSS 把它放大到 size，
+    // 配合 image-rendering: pixelated 做 nearest-neighbor 放大，
+    // 每个色块边缘清晰可见（避免浮点 fillRect 的亚像素模糊，手机高 dpr 上效果尤其明显）。
+    c.width = n; c.height = n;
+    c.style.width = size + 'px'; c.style.height = size + 'px';
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        ctx.fillStyle = window.actColor(data[y][x], dark);
+        ctx.fillRect(x, y, 1, 1);
+      }
+    }
+  }, [data, size, dark, animateKey]);
+
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: radius, overflow: 'hidden',
+      boxShadow: 'inset 0 0 0 0.5px rgba(0,0,0,0.12)',
+      background: dark ? '#1c1c1e' : '#fff',
+      animation: animateKey != null ? `tilePulse 600ms ${delay}ms ease-out both` : 'none',
+    }}>
+      <canvas ref={ref} style={{ imageRendering: 'pixelated', display: 'block' }} />
+    </div>
+  );
+}
+
+// ─── Color legend bar (red-white-blue) ────────────────────────────────
+function ColorLegend({ kind = 'activation', compact = false, dark = false }) {
+  const isAct = kind === 'activation';
+  const grad = isAct
+    ? `linear-gradient(90deg, #dc2626, ${dark ? '#1c1c1e' : '#fff'} 50%, #2563eb)`
+    : `linear-gradient(90deg, #eab308, ${dark ? '#1c1c1e' : '#fff'} 50%, #10b981)`;
+  const left = isAct ? '−1' : '−';
+  const right = isAct ? '+1' : '+';
+  const label = isAct ? '激活值' : '权重';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: compact ? 10 : 11, color: 'var(--text-3)' }}>
+      {!compact && <span style={{ fontFamily: 'var(--font-cn)' }}>{label}</span>}
+      <span className="mono" style={{ minWidth: 16, textAlign: 'right' }}>{left}</span>
+      <div style={{
+        width: compact ? 70 : 100, height: 8, borderRadius: 4,
+        background: grad,
+        boxShadow: 'inset 0 0 0 0.5px rgba(0,0,0,0.18)',
+      }} />
+      <span className="mono">{right}</span>
+    </div>
+  );
+}
+
+// ─── Layer kind chip ──────────────────────────────────────────────────
+function LayerChip({ kind, name, zh }) {
+  const map = {
+    input:   { bg: 'var(--layer-input)',   edge: 'var(--layer-input-edge)',   label: 'INPUT' },
+    conv:    { bg: 'var(--layer-conv)',    edge: 'var(--layer-conv-edge)',    label: 'CONV' },
+    relu:    { bg: 'var(--layer-relu)',    edge: 'var(--layer-relu-edge)',    label: 'RELU' },
+    pool:    { bg: 'var(--layer-pool)',    edge: 'var(--layer-pool-edge)',    label: 'POOL' },
+    softmax: { bg: 'var(--layer-softmax)', edge: 'var(--layer-softmax-edge)', label: 'SOFTMAX' },
+  }[kind] || { bg: '#eee', edge: '#888', label: kind };
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6,
+      padding: '3px 8px 3px 6px', borderRadius: 6,
+      background: map.bg, color: map.edge,
+      fontSize: 10, fontWeight: 700, letterSpacing: 0.5,
+      fontFamily: 'var(--font-mono)',
+    }}>
+      <span style={{ width: 5, height: 5, borderRadius: 1, background: map.edge }} />
+      {map.label}
+    </span>
+  );
+}
+
+// ─── Hint balloon (term explainer) ────────────────────────────────────
+function TermHint({ term, hint }) {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'baseline', gap: 4,
+      padding: '0 4px',
+      background: 'rgba(245,158,11,0.10)',
+      borderBottom: '1px dashed var(--brand-accent)',
+      borderRadius: 3, color: 'var(--text)',
+    }}>
+      {term}
+    </span>
+  );
+}
+
+// ─── Image thumb (procedural) ─────────────────────────────────────────
+function ImageThumb({ catIndex, size = 56, radius = 10 }) {
+  const cat = window.CATEGORIES[catIndex];
+  const data = window.NETWORK_DATA[catIndex].thumb;
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!ref.current) return;
+    const c = ref.current;
+    const ctx = c.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    c.width = size * dpr; c.height = size * dpr;
+    c.style.width = size + 'px'; c.style.height = size + 'px';
+    ctx.scale(dpr, dpr);
+    const n = 8;
+    const cell = size / n;
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        const v = data.cells[y * n + x];
+        const l = 28 + v * 50;
+        const c2 = 0.13 + v * 0.05;
+        ctx.fillStyle = `oklch(${l}% ${c2} ${cat.hue})`;
+        ctx.fillRect(x * cell, y * cell, cell + 0.5, cell + 0.5);
+      }
+    }
+    // soft vignette overlay
+    const grd = ctx.createRadialGradient(size/2, size/2, size*0.2, size/2, size/2, size*0.7);
+    grd.addColorStop(0, 'rgba(0,0,0,0)');
+    grd.addColorStop(1, 'rgba(0,0,0,0.18)');
+    ctx.fillStyle = grd;
+    ctx.fillRect(0, 0, size, size);
+  }, [catIndex, size]);
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: radius, overflow: 'hidden',
+      position: 'relative', flexShrink: 0,
+      boxShadow: 'inset 0 0 0 0.5px rgba(0,0,0,0.18), 0 1px 2px rgba(0,0,0,0.05)',
+    }}>
+      <canvas ref={ref} />
+      <div style={{
+        position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: size * 0.5, filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.3))',
+      }}>{cat.emoji}</div>
+    </div>
+  );
+}
+
+// ─── Tap haptic stub ──────────────────────────────────────────────────
+function haptic() {
+  if (navigator.vibrate) try { navigator.vibrate(8); } catch (e) {}
+}
+
+// ─── RGB image preview (3 channels stacked) ──────────────────────────
+function RGBPreview({ catIndex, size = 70 }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
+      <ImageThumb catIndex={catIndex} size={size} radius={8} />
+      <div style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+        64×64×3
+      </div>
+    </div>
+  );
+}
+
+Object.assign(window, {
+  Heatmap, ColorLegend, LayerChip, TermHint, ImageThumb, RGBPreview, haptic,
+});
+
+</script>
+
+<!-- ===== src/screens/screens-intro.jsx ===== -->
+<script type="text/babel">
+/* global React, CATEGORIES, LAYERS, NETWORK_DATA, Heatmap, ColorLegend, LayerChip, ImageThumb, RGBPreview, haptic */
+const { useState: uS1, useEffect: uE1, useRef: uR1 } = React;
+
+// ─── S1 Splash ────────────────────────────────────────────────────────
+function ScreenSplash({ onDone }) {
+  uE1(() => {
+    const t = setTimeout(() => onDone && onDone(), 1600);
+    return () => clearTimeout(t);
+  }, []);
+  return (
+    <div style={{
+      width: '100%', height: '100%',
+      background: 'linear-gradient(180deg, #fdfdfb 0%, #f0f1ff 100%)',
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      gap: 18, position: 'relative',
+    }}>
+      <div style={{
+        width: 92, height: 92, borderRadius: 22,
+        background: 'linear-gradient(135deg, #1e3a8a 0%, #3b5bdb 100%)',
+        display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4, padding: 14,
+        boxShadow: '0 12px 40px rgba(30,58,138,0.32)',
+        animation: 'splashIn 800ms cubic-bezier(.2,.9,.3,1.2) both',
+      }}>
+        {[0,1,2,3,4,5,6,7,8].map(i => (
+          <div key={i} style={{
+            background: i === 4 ? '#f59e0b' : `rgba(255,255,255,${0.25 + (i%3)*0.15})`,
+            borderRadius: 3,
+            animation: `splashCell 1200ms ${i*60}ms ease-out both`,
+          }} />
+        ))}
+      </div>
+      <div style={{ textAlign: 'center', animation: 'splashIn 800ms 200ms both' }}>
+        <div style={{ fontSize: 32, fontWeight: 700, color: 'var(--brand-primary)', letterSpacing: -0.5 }}>NeuroVis</div>
+        <div style={{ fontSize: 14, color: 'var(--text-3)', marginTop: 6 }}>看见神经网络在想什么</div>
+      </div>
+      <div style={{
+        position: 'absolute', bottom: 60, fontSize: 11, color: 'var(--text-4)',
+        fontFamily: 'var(--font-mono)',
+      }}>v0.1 · MVP</div>
+    </div>
+  );
+}
+
+// ─── S11 Onboarding (3 slides) ────────────────────────────────────────
+function ScreenOnboarding({ onDone }) {
+  const [i, setI] = uS1(0);
+  const slides = [
+    {
+      title: '一起看看神经网络在想什么',
+      desc: '不背公式,不啃论文。点一点、滑一滑,你就能看懂 CNN 是怎么把一张图变成「这是熊猫」的判断。',
+      visual: <OnbVisual1 />,
+    },
+    {
+      title: '点一下,看里面发生了什么',
+      desc: '每个方块都是网络中的一个神经元。轻点它进入更深一层,长按可以看到它的具体数值。',
+      visual: <OnbVisual2 />,
+    },
+    {
+      title: '换张图,看整个网络重新思考',
+      desc: '随时切换输入图像,你会看到信号像水一样从第一层流到最后一层。',
+      visual: <OnbVisual3 />,
+    },
+  ];
+  const cur = slides[i];
+  return (
+    <div style={{
+      width: '100%', height: '100%', background: 'var(--bg)',
+      display: 'flex', flexDirection: 'column',
+    }}>
+      <div style={{ flex: 1, padding: '70px 24px 0', display: 'flex', flexDirection: 'column' }}>
+        <button onClick={() => onDone && onDone()} style={{
+          alignSelf: 'flex-end', background: 'transparent', border: 'none',
+          color: 'var(--text-3)', fontSize: 15, padding: 8,
+        }}>跳过</button>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 28 }}>
+          <div key={i} style={{ animation: 'onbSlide 400ms ease-out both' }}>
+            {cur.visual}
+          </div>
+          <div style={{ textAlign: 'center', maxWidth: 320 }} key={'t'+i}>
+            <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--text)', letterSpacing: -0.3, lineHeight: 1.3, animation: 'onbSlide 400ms 100ms ease-out both' }}>
+              {cur.title}
+            </div>
+            <div style={{ fontSize: 15, color: 'var(--text-2)', marginTop: 12, lineHeight: 1.6, animation: 'onbSlide 400ms 200ms ease-out both' }}>
+              {cur.desc}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style={{ padding: '20px 24px 50px', display: 'flex', flexDirection: 'column', gap: 22, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {slides.map((_, j) => (
+            <div key={j} style={{
+              width: i === j ? 22 : 6, height: 6, borderRadius: 3,
+              background: i === j ? 'var(--brand-primary)' : 'var(--separator-strong)',
+              transition: 'all 300ms ease',
+            }} />
+          ))}
+        </div>
+        <button onClick={() => { haptic(); i === slides.length - 1 ? onDone && onDone() : setI(i+1); }} style={{
+          width: '100%', height: 52, borderRadius: 16, border: 'none',
+          background: 'var(--brand-primary)', color: '#fff',
+          fontSize: 17, fontWeight: 600, letterSpacing: 0.2,
+          boxShadow: '0 4px 16px rgba(30,58,138,0.25)',
+        }}>
+          {i === slides.length - 1 ? '开始' : '下一步'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function OnbVisual1() {
+  // a tiny network sketch
+  return (
+    <div style={{
+      width: 240, height: 160, position: 'relative',
+      background: 'linear-gradient(135deg, #f0f1ff 0%, #fff7e6 100%)',
+      borderRadius: 22, padding: 18,
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    }}>
+      {[0, 1, 2, 3].map(col => (
+        <div key={col} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {Array.from({ length: 3 - Math.abs(col-1.5) | 0 || 3 }).map((_, r) => (
+            <div key={r} style={{
+              width: 22, height: 22, borderRadius: 4,
+              background: col === 0 ? '#f59e0b' : col === 3 ? '#1e3a8a' : `rgba(30,58,138,${0.15 + r*0.15})`,
+              animation: `tilePulse 1500ms ${(col*200)+(r*80)}ms infinite ease-in-out`,
+            }} />
+          ))}
+        </div>
+      ))}
+      <svg style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }} viewBox="0 0 240 160">
+        {[[40,80,90,55],[40,80,90,80],[40,80,90,105],[90,55,150,55],[90,80,150,80],[90,105,150,105],[150,55,200,80],[150,80,200,80],[150,105,200,80]].map(([x1,y1,x2,y2],i) => (
+          <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(30,58,138,0.18)" strokeWidth="1" />
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+function OnbVisual2() {
+  const [stage, setStage] = uS1(0);
+  uE1(() => {
+    const id = setInterval(() => setStage(s => (s+1) % 3), 1200);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <div style={{
+      width: 240, height: 160, position: 'relative',
+      background: 'linear-gradient(135deg, #fff7e6 0%, #ffe4cc 100%)',
+      borderRadius: 22, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}>
+      <div style={{
+        width: 80, height: 80, borderRadius: 12, background: '#1e3a8a',
+        display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 2, padding: 6,
+        boxShadow: stage >= 1 ? '0 0 0 4px rgba(245,158,11,0.4), 0 8px 24px rgba(30,58,138,0.3)' : '0 4px 12px rgba(30,58,138,0.2)',
+        transition: 'box-shadow 300ms ease',
+      }}>
+        {Array.from({length:16}).map((_,i)=>(
+          <div key={i} style={{
+            background: ['rgba(255,255,255,0.4)','rgba(245,158,11,0.7)','rgba(255,255,255,0.7)','rgba(220,38,38,0.5)'][i%4],
+            borderRadius: 1,
+          }} />
+        ))}
+      </div>
+      {stage >= 2 && (
+        <div style={{
+          position: 'absolute', right: 24, top: 36,
+          background: '#fff', padding: '8px 12px', borderRadius: 10,
+          boxShadow: '0 4px 16px rgba(0,0,0,0.12)', fontSize: 11,
+          fontFamily: 'var(--font-mono)',
+          animation: 'onbSlide 300ms ease-out both',
+        }}>
+          <div style={{ color: 'var(--text-3)' }}>activation</div>
+          <div style={{ color: 'var(--text)', fontWeight: 600 }}>+0.73</div>
+        </div>
+      )}
+      <div style={{
+        position: 'absolute', bottom: 18, left: '50%', transform: 'translateX(-50%)',
+        fontSize: 11, color: 'var(--text-3)', display: 'flex', gap: 12,
+      }}>
+        <span>● 轻点 = 进入</span>
+        <span>● 长按 = 数值</span>
+      </div>
+    </div>
+  );
+}
+
+function OnbVisual3() {
+  return (
+    <div style={{
+      width: 240, height: 160,
+      background: 'linear-gradient(135deg, #e6f4ff 0%, #f0f1ff 100%)',
+      borderRadius: 22, padding: 18,
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      position: 'relative', overflow: 'hidden',
+    }}>
+      <div style={{ display: 'flex', gap: 6 }}>
+        {[0,1,2].map(i => <ImageThumb key={i} catIndex={i*3} size={32} radius={6} />)}
+      </div>
+      <svg viewBox="0 0 60 80" style={{ width: 60, height: 80 }}>
+        <defs>
+          <linearGradient id="flowGrad" x1="0" x2="1">
+            <stop offset="0" stopColor="#f59e0b" stopOpacity="0"/>
+            <stop offset="0.5" stopColor="#f59e0b"/>
+            <stop offset="1" stopColor="#f59e0b" stopOpacity="0"/>
+          </linearGradient>
+        </defs>
+        <path d="M 5 40 Q 30 10 55 40" fill="none" stroke="url(#flowGrad)" strokeWidth="3" strokeLinecap="round">
+          <animate attributeName="stroke-dashoffset" from="0" to="-40" dur="1.4s" repeatCount="indefinite"/>
+          <animate attributeName="stroke-dasharray" values="4 6;4 6" dur="1.4s" repeatCount="indefinite"/>
+        </path>
+        <path d="M 5 40 Q 30 70 55 40" fill="none" stroke="url(#flowGrad)" strokeWidth="3" strokeLinecap="round" strokeDasharray="4 6">
+          <animate attributeName="stroke-dashoffset" from="0" to="-40" dur="1.4s" repeatCount="indefinite"/>
+        </path>
+      </svg>
+      <div style={{
+        width: 60, height: 60, borderRadius: 8,
+        background: '#1e3a8a', display: 'flex', flexDirection: 'column',
+        padding: 6, gap: 3,
+      }}>
+        {[0.8, 0.12, 0.05, 0.03].map((p, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <div style={{ width: 6, height: 6, borderRadius: 1, background: i === 0 ? '#f59e0b' : 'rgba(255,255,255,0.3)' }} />
+            <div style={{ flex: 1, height: 4, borderRadius: 1, background: 'rgba(255,255,255,0.18)', overflow: 'hidden' }}>
+              <div style={{ width: `${p*100}%`, height: '100%', background: i === 0 ? '#f59e0b' : '#fff' }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+Object.assign(window, { ScreenSplash, ScreenOnboarding });
+
+</script>
+
+<!-- ===== src/screens/screens-home.jsx ===== -->
+<script type="text/babel">
+/* global React, CATEGORIES, NETWORK_DATA, ImageThumb, haptic */
+const { useState: uS2, useEffect: uE2 } = React;
+
+// ─── S2 Home ──────────────────────────────────────────────────────────
+function ScreenHome({ onOpenCNN, onOpenSettings }) {
+  const upcoming = [
+    { id: 'rnn', name: 'RNN', zh: '循环神经网络', desc: '处理序列与时间' },
+    { id: 'lstm', name: 'LSTM', zh: '长短期记忆', desc: '记得住,也忘得掉' },
+    { id: 'transformer', name: 'Transformer', zh: '注意力机制', desc: '改变了 AI 的一切' },
+  ];
+  return (
+    <div style={{ width: '100%', height: '100%', background: 'var(--bg)', overflowY: 'auto' }}>
+      <div style={{ padding: '60px 20px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <div style={{ fontSize: 13, color: 'var(--text-3)', letterSpacing: 1, fontFamily: 'var(--font-mono)' }}>NEUROVIS</div>
+          <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--text)', marginTop: 4, letterSpacing: -0.4, lineHeight: 1.2 }}>
+            一起看看<br/>神经网络在想什么
+          </div>
+        </div>
+        <button onClick={() => { haptic(); onOpenSettings && onOpenSettings(); }} style={{
+          width: 38, height: 38, borderRadius: 19, border: 'none',
+          background: 'var(--bg-card)', boxShadow: 'var(--shadow-1)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexShrink: 0,
+        }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="3" stroke="#3a3a40" strokeWidth="1.6"/>
+            <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z" stroke="#3a3a40" strokeWidth="1.4"/>
+          </svg>
+        </button>
+      </div>
+
+      {/* CNN hero card */}
+      <div style={{ padding: '8px 20px 0' }}>
+        <button onClick={() => { haptic(); onOpenCNN && onOpenCNN(); }} style={{
+          width: '100%', textAlign: 'left', border: 'none', padding: 0,
+          background: 'transparent',
+        }}>
+          <div style={{
+            width: '100%', borderRadius: 24, padding: 22,
+            background: 'linear-gradient(135deg, #1e3a8a 0%, #3b5bdb 100%)',
+            boxShadow: '0 12px 32px rgba(30,58,138,0.28)',
+            color: '#fff', position: 'relative', overflow: 'hidden',
+            minHeight: 240,
+          }}>
+            {/* decorative neuron grid */}
+            <div style={{
+              position: 'absolute', right: -10, top: -10,
+              display: 'grid', gridTemplateColumns: 'repeat(5, 22px)', gap: 4,
+              opacity: 0.55, transform: 'rotate(-8deg)',
+            }}>
+              {Array.from({length: 25}).map((_,i)=>(
+                <div key={i} style={{
+                  width: 22, height: 22, borderRadius: 4,
+                  background: [
+                    'rgba(245,158,11,0.85)', 'rgba(255,255,255,0.16)',
+                    'rgba(255,255,255,0.32)', 'rgba(245,158,11,0.5)',
+                    'rgba(255,255,255,0.10)',
+                  ][i%5],
+                  animation: `tilePulse 3s ${(i*120)%2400}ms infinite ease-in-out`,
+                }} />
+              ))}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, fontFamily: 'var(--font-mono)', letterSpacing: 1, opacity: 0.8 }}>
+              <span style={{ width: 6, height: 6, borderRadius: 3, background: '#f59e0b' }} />
+              MODULE 01 · CNN
+            </div>
+            <div style={{ fontSize: 28, fontWeight: 700, marginTop: 16, letterSpacing: -0.3, lineHeight: 1.15 }}>
+              卷积神经<br/>网络
+            </div>
+            <div style={{ fontSize: 13, opacity: 0.78, marginTop: 8, lineHeight: 1.5, maxWidth: 240 }}>
+              图片是如何变成「这是熊猫」的判断的?点开看每一层网络在做什么。
+            </div>
+            <div style={{
+              marginTop: 22, display: 'inline-flex', alignItems: 'center', gap: 6,
+              padding: '8px 14px', borderRadius: 100, background: '#f59e0b',
+              color: '#3a2a05', fontSize: 14, fontWeight: 600,
+            }}>
+              进入模块
+              <svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 1l5 5-5 5" stroke="#3a2a05" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            </div>
+            <div style={{
+              position: 'absolute', bottom: 20, right: 22, display: 'flex', gap: 10,
+              fontSize: 11, fontFamily: 'var(--font-mono)', opacity: 0.68,
+            }}>
+              <span>9 layers</span>
+              <span>·</span>
+              <span>10 classes</span>
+            </div>
+          </div>
+        </button>
+      </div>
+
+      {/* upcoming */}
+      <div style={{ padding: '28px 20px 8px' }}>
+        <div style={{ fontSize: 12, color: 'var(--text-3)', letterSpacing: 1, fontFamily: 'var(--font-mono)', marginBottom: 12 }}>
+          即将上线 · COMING SOON
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {upcoming.map((m, i) => (
+            <div key={m.id} style={{
+              display: 'flex', alignItems: 'center', gap: 14,
+              padding: 14, borderRadius: 16,
+              background: 'var(--bg-card)', boxShadow: 'var(--shadow-1)',
+              opacity: 0.62,
+            }}>
+              <div style={{
+                width: 44, height: 44, borderRadius: 10,
+                background: 'var(--bg-grouped)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700,
+                color: 'var(--text-3)',
+              }}>0{i+2}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-2)' }}>
+                  {m.zh} <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-3)', fontWeight: 400 }}>· {m.name}</span>
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>{m.desc}</div>
+              </div>
+              <div style={{
+                fontSize: 10, padding: '4px 8px', borderRadius: 6,
+                background: 'var(--bg-grouped)', color: 'var(--text-3)',
+                fontFamily: 'var(--font-mono)', letterSpacing: 0.5,
+              }}>SOON</div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{ height: 50 }} />
+    </div>
+  );
+}
+
+// ─── S3 CNN Module Entry ──────────────────────────────────────────────
+function ScreenCNNEntry({ onBack, onStartViz, onStartTutorial }) {
+  return (
+    <div style={{ width: '100%', height: '100%', background: 'var(--bg)', overflowY: 'auto' }}>
+      <div style={{ padding: '60px 20px 0' }}>
+        <button onClick={() => { haptic(); onBack && onBack(); }} style={{
+          width: 38, height: 38, borderRadius: 19, border: 'none',
+          background: 'var(--bg-card)', boxShadow: 'var(--shadow-1)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <svg width="10" height="16" viewBox="0 0 10 16"><path d="M8 1L2 8l6 7" stroke="#3a3a40" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </button>
+      </div>
+
+      <div style={{ padding: '20px 20px 16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, fontFamily: 'var(--font-mono)', letterSpacing: 1, color: 'var(--brand-primary)' }}>
+          <span style={{ width: 6, height: 6, borderRadius: 3, background: 'var(--brand-accent)' }} />
+          MODULE 01
+        </div>
+        <div style={{ fontSize: 32, fontWeight: 700, color: 'var(--text)', marginTop: 8, letterSpacing: -0.4, lineHeight: 1.2 }}>
+          卷积神经网络
+        </div>
+        <div style={{ fontSize: 14, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginTop: 4 }}>
+          Convolutional Neural Networks
+        </div>
+        <div style={{ fontSize: 15, color: 'var(--text-2)', marginTop: 18, lineHeight: 1.65 }}>
+          咱们一起看看,一张 64×64 的图片,是怎么穿过 9 层网络,最终变成「这是熊猫」这样的判断的。
+        </div>
+      </div>
+
+      {/* mini network preview */}
+      <div style={{ padding: '8px 20px 20px' }}>
+        <div style={{
+          padding: 18, borderRadius: 18,
+          background: 'linear-gradient(180deg, #fafbff 0%, #fff7e6 100%)',
+          boxShadow: 'var(--shadow-1)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+            <ImageThumb catIndex={0} size={42} radius={6} />
+            {[0,1,2,3,4].map(i => (
+              <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {[0,1,2].map(r => (
+                  <div key={r} style={{
+                    width: 12, height: 12, borderRadius: 2,
+                    background: ['#1e3a8a','#f59e0b','#1e3a8a','#10b981','#a21caf'][i],
+                    opacity: 0.4 + r*0.25,
+                  }} />
+                ))}
+              </div>
+            ))}
+            <div style={{
+              width: 42, height: 42, borderRadius: 6,
+              background: '#1e3a8a', color: '#fff',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 9, fontFamily: 'var(--font-mono)', fontWeight: 600,
+            }}>0.87</div>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10, fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>
+            <span>输入</span><span>conv</span><span>relu</span><span>pool</span><span>···</span><span>softmax</span>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ padding: '0 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <button onClick={() => { haptic(); onStartViz && onStartViz(); }} style={{
+          width: '100%', minHeight: 64, borderRadius: 18, border: 'none',
+          background: 'var(--brand-primary)', color: '#fff',
+          padding: '14px 20px', textAlign: 'left',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          boxShadow: '0 8px 24px rgba(30,58,138,0.22)',
+        }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 600 }}>开始体验可视化</div>
+            <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>看 9 层网络一层层展开</div>
+          </div>
+          <div style={{
+            width: 36, height: 36, borderRadius: 18, background: 'var(--brand-accent)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <svg width="14" height="14" viewBox="0 0 12 12"><path d="M3 1l5 5-5 5" stroke="#3a2a05" strokeWidth="2.2" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          </div>
+        </button>
+
+        <button onClick={() => { haptic(); onStartTutorial && onStartTutorial(); }} style={{
+          width: '100%', minHeight: 64, borderRadius: 18,
+          background: 'var(--bg-card)', color: 'var(--text)',
+          padding: '14px 20px', textAlign: 'left',
+          border: '1px solid var(--separator)',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          boxShadow: 'var(--shadow-1)',
+        }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 600 }}>先读教程</div>
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>10 分钟图文,讲清每一层</div>
+          </div>
+          <svg width="14" height="14" viewBox="0 0 12 12"><path d="M3 1l5 5-5 5" stroke="#3a3a40" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </button>
+      </div>
+
+      <div style={{ padding: '24px 20px', display: 'flex', gap: 18, fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>
+        <div><span style={{ color: 'var(--text)', fontWeight: 600 }}>9</span> layers</div>
+        <div><span style={{ color: 'var(--text)', fontWeight: 600 }}>10</span> classes</div>
+        <div><span style={{ color: 'var(--text)', fontWeight: 600 }}>~5</span> min read</div>
+      </div>
+    </div>
+  );
+}
+
+Object.assign(window, { ScreenHome, ScreenCNNEntry });
+
+</script>
+
+<!-- ===== src/screens/screens-l1.jsx ===== -->
+<script type="text/babel">
+/* global React, CATEGORIES, LAYERS, NETWORK_DATA, Heatmap, ColorLegend, LayerChip, ImageThumb, RGBPreview, haptic */
+const { useState: uS3, useEffect: uE3, useRef: uR3, useMemo: uM3 } = React;
+
+// ─── Layer row in the vertical stack ──────────────────────────────────
+function LayerRow({ layer, layerIndex, channels, catIndex, isLandscape, isFocused, onTapNeuron, computeWave }) {
+  const showCount = isLandscape ? channels.length : Math.min(channels.length, 5);
+  const tileSize = isLandscape ? 38 : (layer.size === 1 ? 'softmax' : 44);
+
+  if (layer.kind === 'softmax') {
+    return (
+      <SoftmaxRow layer={layer} probs={NETWORK_DATA[catIndex].output[0]} onTapNeuron={onTapNeuron} computeWave={computeWave} layerIndex={layerIndex} />
+    );
+  }
+
+  return (
+    <div style={{
+      display: 'flex', flexDirection: isLandscape ? 'column' : 'row',
+      alignItems: isLandscape ? 'center' : 'flex-start',
+      gap: isLandscape ? 8 : 14,
+      padding: isLandscape ? 10 : '12px 14px',
+      borderRadius: 14,
+      background: isFocused ? 'var(--bg-card)' : 'transparent',
+      transition: 'background 200ms ease',
+      position: 'relative',
+    }}>
+      {/* Label */}
+      <div style={{
+        minWidth: isLandscape ? 'auto' : 86, paddingTop: 2,
+        textAlign: isLandscape ? 'center' : 'left',
+      }}>
+        <LayerChip kind={layer.kind} />
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-2)', marginTop: 4, letterSpacing: -0.2 }}>
+          {layer.name}
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
+          {layer.size}×{layer.size}×{layer.ch}
+        </div>
+      </div>
+
+      {/* Tiles */}
+      <div style={{
+        display: 'flex', flexWrap: 'wrap',
+        gap: 6, flex: 1,
+        justifyContent: isLandscape ? 'center' : 'flex-start',
+      }}>
+        {channels.slice(0, showCount).map((m, c) => (
+          <button key={c} onClick={() => { haptic(); onTapNeuron && onTapNeuron(layerIndex, c); }} style={{
+            border: 'none', padding: 0, background: 'transparent', cursor: 'pointer',
+          }}>
+            <Heatmap data={m} size={isLandscape ? 38 : 44} radius={5} animateKey={computeWave?.[layerIndex] ?? null} delay={c * 30} />
+          </button>
+        ))}
+        {channels.length > showCount && !isLandscape && (
+          <div style={{
+            width: 44, height: 44, borderRadius: 5,
+            background: 'var(--bg-grouped)', color: 'var(--text-3)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: 600,
+          }}>+{channels.length - showCount}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Input row (RGB image) ───────────────────────────────────────────
+function InputRow({ catIndex, isLandscape, onTapImage, computeWave }) {
+  return (
+    <div style={{
+      display: 'flex', flexDirection: isLandscape ? 'column' : 'row',
+      alignItems: isLandscape ? 'center' : 'flex-start',
+      gap: isLandscape ? 8 : 14,
+      padding: isLandscape ? 10 : '12px 14px',
+    }}>
+      <div style={{ minWidth: isLandscape ? 'auto' : 86, textAlign: isLandscape ? 'center' : 'left' }}>
+        <LayerChip kind="input" />
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-2)', marginTop: 4 }}>input</div>
+        <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>64×64×3</div>
+      </div>
+      <button onClick={() => { haptic(); onTapImage && onTapImage(); }} style={{
+        border: 'none', background: 'transparent', padding: 0,
+        display: 'flex', alignItems: 'center', gap: 8,
+      }}>
+        <ImageThumb catIndex={catIndex} size={isLandscape ? 60 : 72} radius={8} />
+        {!isLandscape && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px',
+            borderRadius: 100, background: 'var(--bg-grouped)',
+            fontSize: 12, color: 'var(--text-2)',
+          }}>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            换图
+          </div>
+        )}
+      </button>
+    </div>
+  );
+}
+
+// ─── Softmax (output) row ────────────────────────────────────────────
+function SoftmaxRow({ layer, probs, onTapNeuron, computeWave, layerIndex }) {
+  const sorted = probs.map((p, i) => ({ p, i })).sort((a,b) => b.p - a.p);
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', gap: 8,
+      padding: '12px 14px',
+      borderRadius: 14,
+      background: 'linear-gradient(180deg, rgba(217,70,239,0.06) 0%, rgba(217,70,239,0) 100%)',
+      animation: computeWave?.[layerIndex] != null ? 'softmaxIn 600ms ease-out both' : 'none',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <LayerChip kind="softmax" />
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-2)' }}>softmax</div>
+        <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>10 classes</div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 4 }}>
+        {sorted.slice(0, 5).map((s, idx) => {
+          const cat = CATEGORIES[s.i];
+          const isTop = idx === 0;
+          return (
+            <button key={s.i} onClick={() => { haptic(); onTapNeuron && onTapNeuron(layerIndex, s.i); }} style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '6px 8px', borderRadius: 8, border: 'none',
+              background: isTop ? 'rgba(245,158,11,0.12)' : 'transparent',
+              textAlign: 'left',
+            }}>
+              <span style={{ fontSize: 16, width: 22, textAlign: 'center' }}>{cat.emoji}</span>
+              <span style={{ fontSize: 13, color: 'var(--text)', fontWeight: isTop ? 600 : 500, minWidth: 70 }}>{cat.zh}</span>
+              <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'rgba(0,0,0,0.06)', overflow: 'hidden' }}>
+                <div style={{
+                  width: `${s.p * 100}%`, height: '100%',
+                  background: isTop ? 'var(--brand-accent)' : 'var(--brand-primary-2)',
+                  transition: 'width 600ms cubic-bezier(.2,.8,.2,1)',
+                }} />
+              </div>
+              <span className="mono" style={{ fontSize: 11, color: isTop ? 'var(--text)' : 'var(--text-3)', fontWeight: 600, minWidth: 38, textAlign: 'right' }}>
+                {(s.p * 100).toFixed(1)}%
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Connection lines overlay ────────────────────────────────────────
+function ConnectionLines({ active, layerIndex, channelIndex, isLandscape, animKey }) {
+  // simulated: just show 5 lines from current to prev layer
+  if (!active) return null;
+  return (
+    <div style={{
+      position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 5,
+    }}>
+      <svg width="100%" height="100%" style={{ overflow: 'visible' }}>
+        {[0,1,2,3,4].map(i => (
+          <line key={i}
+            x1="20%" y1={`${10 + i*4}%`}
+            x2="60%" y2={`${20 + i*5}%`}
+            stroke="#f59e0b" strokeWidth="1.2" strokeDasharray="3 4" opacity="0.7"
+          />
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+// ─── S4 L1 Overview ──────────────────────────────────────────────────
+function ScreenL1({ catIndex, onChangeCat, onTapNeuron, onOpenImagePicker, onOpenTutorial, onBack, isLandscape, computeWave, onToggleOrient }) {
+  const data = NETWORK_DATA[catIndex];
+  const cat = CATEGORIES[catIndex];
+
+  return (
+    <div style={{ width: '100%', height: '100%', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
+      {/* Top bar */}
+      <div style={{
+        padding: isLandscape ? '14px 16px 8px' : '60px 16px 8px',
+        display: 'flex', alignItems: 'center', gap: 10,
+        background: 'var(--bg)', borderBottom: '0.5px solid var(--separator)',
+      }}>
+        <button onClick={() => { haptic(); onBack && onBack(); }} style={{
+          width: 34, height: 34, borderRadius: 17, border: 'none',
+          background: 'var(--bg-card)', boxShadow: 'var(--shadow-1)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <svg width="9" height="14" viewBox="0 0 10 16"><path d="M8 1L2 8l6 7" stroke="#3a3a40" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </button>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', letterSpacing: 0.5 }}>L1 · 总览</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)', letterSpacing: -0.2 }}>Tiny VGG · 9 层</div>
+        </div>
+        <button onClick={() => { haptic(); onOpenImagePicker && onOpenImagePicker(); }} style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px 6px 6px', borderRadius: 100,
+          background: 'var(--bg-card)', border: '1px solid var(--separator)', boxShadow: 'var(--shadow-1)',
+        }}>
+          <ImageThumb catIndex={catIndex} size={26} radius={5} />
+          <span style={{ fontSize: 13, color: 'var(--text)' }}>{cat.zh}</span>
+          <svg width="9" height="9" viewBox="0 0 12 12"><path d="M2 4l4 4 4-4" stroke="#3a3a40" strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </button>
+        <button onClick={() => { haptic(); onToggleOrient && onToggleOrient(); }} title="切换横屏" style={{
+          width: 34, height: 34, borderRadius: 17, border: 'none',
+          background: 'var(--bg-card)', boxShadow: 'var(--shadow-1)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+            <rect x="2" y="6" width="20" height="12" rx="2" stroke="#3a3a40" strokeWidth="1.6"/>
+            <path d="M5 11l-2 1 2 1M19 11l2 1-2 1" stroke="#f59e0b" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </button>
+      </div>
+
+      {/* Legend */}
+      <div style={{
+        padding: '8px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: 10, borderBottom: '0.5px solid var(--separator)', background: 'var(--bg-elevated)',
+      }}>
+        <ColorLegend kind="activation" compact />
+        <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>
+          点击方块 → 进入 L2
+        </div>
+      </div>
+
+      {/* Stack */}
+      <div style={{
+        flex: 1, overflowY: 'auto',
+        padding: isLandscape ? '12px 8px' : '8px 8px 80px',
+        display: 'flex',
+        flexDirection: isLandscape ? 'row' : 'column',
+        gap: isLandscape ? 6 : 6,
+        position: 'relative',
+      }}>
+        {!isLandscape && <DataFlowSpine count={LAYERS.length} computeWave={computeWave} />}
+        <InputRow catIndex={catIndex} isLandscape={isLandscape} onTapImage={onOpenImagePicker} computeWave={computeWave} />
+        {LAYERS.slice(1).map((layer, i) => (
+          <LayerRow
+            key={layer.id}
+            layer={layer}
+            layerIndex={i + 1}
+            channels={data[layer.id]}
+            catIndex={catIndex}
+            isLandscape={isLandscape}
+            onTapNeuron={onTapNeuron}
+            computeWave={computeWave}
+          />
+        ))}
+      </div>
+
+      {/* Bottom hint */}
+      {!isLandscape && (
+        <div style={{
+          position: 'absolute', bottom: 36, left: 16, right: 16,
+          padding: '10px 14px', borderRadius: 14,
+          background: 'rgba(255,255,255,0.85)',
+          backdropFilter: 'blur(12px)',
+          WebkitBackdropFilter: 'blur(12px)',
+          border: '0.5px solid var(--separator)',
+          boxShadow: 'var(--shadow-2)',
+          fontSize: 12, color: 'var(--text-2)',
+          display: 'flex', alignItems: 'center', gap: 10,
+        }}>
+          <span style={{ width: 6, height: 6, borderRadius: 3, background: 'var(--brand-accent)' }} />
+          点一下任意方块,看看里面发生了什么
+        </div>
+      )}
+    </div>
+  );
+}
+
+// data flow spine connecting layers
+function DataFlowSpine({ count, computeWave }) {
+  return (
+    <div style={{
+      position: 'absolute', left: 56, top: 80, bottom: 80, width: 2,
+      background: 'linear-gradient(180deg, rgba(30,58,138,0) 0%, rgba(30,58,138,0.18) 10%, rgba(30,58,138,0.18) 90%, rgba(30,58,138,0) 100%)',
+      pointerEvents: 'none', zIndex: 0,
+    }}>
+      {computeWave && Object.keys(computeWave).map((idx) => (
+        <div key={idx} style={{
+          position: 'absolute', left: -3, top: `${(parseInt(idx)/count)*100}%`,
+          width: 8, height: 8, borderRadius: 4, background: 'var(--brand-accent)',
+          boxShadow: '0 0 12px rgba(245,158,11,0.8)',
+          animation: 'spineDot 600ms ease-out both',
+        }} />
+      ))}
+    </div>
+  );
+}
+
+Object.assign(window, { ScreenL1 });
+
+</script>
+
+<!-- ===== src/screens/screens-l2.jsx ===== -->
+<script type="text/babel">
+/* global React, CATEGORIES, LAYERS, NETWORK_DATA, CNN, Heatmap, ColorLegend, LayerChip, ImageThumb, weightColor, actColor, haptic */
+const { useState: uS4, useEffect: uE4, useRef: uR4, useMemo: uM4 } = React;
+
+// ─── S5 L2 — Conv layer detail with kernel sliding animation ──────────
+function ScreenL2Conv({ catIndex, layerIndex, channelIndex, onBack, onOpenL3, isLandscape }) {
+  const layer = LAYERS[layerIndex];
+  const prevLayer = LAYERS[layerIndex - 1];
+  const data = NETWORK_DATA[catIndex];
+  const inputMap = data[prevLayer.id][0]; // pick channel 0 of prev as input demo
+  const outputMap = data[layer.id][channelIndex];
+  // 取该 conv 层第 channelIndex 个输出通道在 inCh=0 上的 3×3 切片
+  // (跟 catIndex 无关 — 权重一旦确定就不再随输入变)
+  const kernel = uM4(() => CNN.getKernelSlice(layer.id, channelIndex) || [[0,0,0],[0,0,0],[0,0,0]], [layer.id, channelIndex]);
+  const [pos, setPos] = uS4({ x: 0, y: 0 });
+  const [playing, setPlaying] = uS4(true);
+  const [speed, setSpeed] = uS4(1);
+
+  const N = inputMap.length;
+  const outN = outputMap.length;
+  const maxX = outN - 1;
+  const maxY = outN - 1;
+
+  uE4(() => {
+    if (!playing) return;
+    const tick = () => {
+      setPos(p => {
+        let x = p.x + 1;
+        let y = p.y;
+        if (x > maxX) { x = 0; y = y + 1; }
+        if (y > maxY) { y = 0; }
+        return { x, y };
+      });
+    };
+    const id = setInterval(tick, 600 / speed);
+    return () => clearInterval(id);
+  }, [playing, speed, maxX, maxY]);
+
+  // compute the dot product at current pos
+  const dot = uM4(() => {
+    let s = 0;
+    for (let dy = 0; dy < 3; dy++) {
+      for (let dx = 0; dx < 3; dx++) {
+        const ix = Math.min(N-1, pos.x + dx);
+        const iy = Math.min(N-1, pos.y + dy);
+        s += (inputMap[iy]?.[ix] ?? 0) * kernel[dy][dx];
+      }
+    }
+    return s;
+  }, [pos, kernel, inputMap]);
+
+  const cellSize = 16;
+  const gridSize = N * cellSize;
+  const outCellSize = 16;
+  const outGridSize = outN * outCellSize;
+
+  return (
+    <div style={{ width: '100%', height: '100%', background: 'var(--bg)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{
+        padding: '60px 16px 8px', display: 'flex', alignItems: 'center', gap: 10,
+        borderBottom: '0.5px solid var(--separator)',
+      }}>
+        <button onClick={() => { haptic(); onBack && onBack(); }} style={{
+          width: 34, height: 34, borderRadius: 17, border: 'none',
+          background: 'var(--bg-card)', boxShadow: 'var(--shadow-1)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <svg width="14" height="14" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7" stroke="#3a3a40" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </button>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', letterSpacing: 0.5 }}>L2 · 单层展开</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)' }}>{layer.zh} · 神经元 {channelIndex + 1}</div>
+        </div>
+        <LayerChip kind={layer.kind} />
+      </div>
+
+      <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px 80px' }}>
+        {/* Equation strip */}
+        <div style={{
+          padding: 12, borderRadius: 14,
+          background: 'linear-gradient(180deg, rgba(30,58,138,0.04) 0%, rgba(30,58,138,0) 100%)',
+          border: '0.5px solid var(--separator)',
+          marginBottom: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-around', gap: 8,
+        }}>
+          <ScopedHeatmap data={inputMap} pos={pos} cellSize={9} label="输入" labelEn="input" />
+          <Operator op="⊛" />
+          <KernelTile kernel={kernel} cellSize={14} label="卷积核" labelEn="3×3 kernel" />
+          <Operator op="=" />
+          <OutputTile map={outputMap} pos={pos} cellSize={9} label="输出" labelEn="feature map" />
+        </div>
+
+        <button onClick={() => { haptic(); onOpenL3 && onOpenL3(); }} style={{
+          width: '100%', padding: '10px 14px', borderRadius: 12,
+          background: 'var(--brand-primary)', border: 'none', color: '#fff',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          fontSize: 14, fontWeight: 600, marginBottom: 14,
+          boxShadow: '0 4px 14px rgba(30,58,138,0.2)',
+        }}>
+          <span>看看每一格的具体计算 · L3</span>
+          <svg width="14" height="14" viewBox="0 0 12 12"><path d="M3 1l5 5-5 5" stroke="#fff" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </button>
+
+        {/* Big input map with kernel overlay */}
+        <SectionTitle zh="卷积核在输入上滑动" en="kernel sliding over input" />
+        <div style={{
+          padding: 16, borderRadius: 16, background: 'var(--bg-card)',
+          boxShadow: 'var(--shadow-1)', display: 'flex', justifyContent: 'center', alignItems: 'center',
+          marginBottom: 14, position: 'relative',
+        }}>
+          <BigGrid map={inputMap} pos={pos} kernel={kernel} cellSize={cellSize} />
+        </div>
+
+        {/* dot product readout */}
+        <div style={{
+          padding: '10px 14px', borderRadius: 12, background: 'var(--bg-card)',
+          boxShadow: 'var(--shadow-1)', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 12,
+        }}>
+          <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>当前位置</div>
+          <span className="mono" style={{ fontSize: 13, color: 'var(--text)' }}>({pos.x}, {pos.y})</span>
+          <div style={{ flex: 1 }} />
+          <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>结果</div>
+          <span className="mono" style={{
+            fontSize: 14, fontWeight: 700,
+            color: dot > 0 ? 'var(--act-pos)' : 'var(--act-neg)',
+          }}>{dot >= 0 ? '+' : ''}{dot.toFixed(2)}</span>
+        </div>
+
+        {/* output feature map */}
+        <SectionTitle zh="输出特征图(逐格生成)" en="output feature map" />
+        <div style={{
+          padding: 16, borderRadius: 16, background: 'var(--bg-card)',
+          boxShadow: 'var(--shadow-1)', display: 'flex', justifyContent: 'center', alignItems: 'center',
+        }}>
+          <OutputBigGrid map={outputMap} pos={pos} cellSize={outCellSize} />
+        </div>
+
+        {/* controls */}
+        <div style={{
+          marginTop: 16, padding: '10px 14px', borderRadius: 14,
+          background: 'var(--bg-card)', boxShadow: 'var(--shadow-1)',
+          display: 'flex', alignItems: 'center', gap: 10,
+        }}>
+          <button onClick={() => { haptic(); setPlaying(p => !p); }} style={{
+            width: 36, height: 36, borderRadius: 18, border: 'none',
+            background: 'var(--brand-primary)', color: '#fff',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            {playing ? (
+              <svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="2" width="3" height="8" fill="#fff"/><rect x="7" y="2" width="3" height="8" fill="#fff"/></svg>
+            ) : (
+              <svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 2l7 4-7 4z" fill="#fff"/></svg>
+            )}
+          </button>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[0.5, 1, 2].map(s => (
+              <button key={s} onClick={() => { haptic(); setSpeed(s); }} style={{
+                padding: '4px 10px', borderRadius: 8, border: 'none',
+                background: speed === s ? 'var(--brand-primary)' : 'var(--bg-grouped)',
+                color: speed === s ? '#fff' : 'var(--text-2)',
+                fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-mono)',
+              }}>{s}×</button>
+            ))}
+          </div>
+          <div style={{ flex: 1 }} />
+          <button onClick={() => { haptic(); setPos({x:0, y:0}); }} style={{
+            padding: '6px 10px', borderRadius: 8, border: 'none',
+            background: 'var(--bg-grouped)', color: 'var(--text-2)', fontSize: 12,
+          }}>重置</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SectionTitle({ zh, en }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8, padding: '0 2px' }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{zh}</div>
+      <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{en}</div>
+    </div>
+  );
+}
+
+function Operator({ op }) {
+  return (
+    <div style={{
+      fontSize: 18, color: 'var(--text-3)', fontFamily: 'var(--font-mono)',
+      padding: '0 4px', alignSelf: 'center',
+    }}>{op}</div>
+  );
+}
+
+function ScopedHeatmap({ data, pos, cellSize, label, labelEn }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+      <div style={{ position: 'relative' }}>
+        <Heatmap data={data} size={data.length * cellSize} radius={3} />
+        {pos && (
+          <div style={{
+            position: 'absolute', left: pos.x * cellSize, top: pos.y * cellSize,
+            width: cellSize * 3, height: cellSize * 3,
+            border: '1.5px solid #f59e0b',
+            boxShadow: '0 0 0 1px rgba(245,158,11,0.3)',
+            transition: 'left 200ms ease, top 200ms ease', borderRadius: 1,
+          }} />
+        )}
+      </div>
+      <div style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{labelEn}</div>
+    </div>
+  );
+}
+
+function KernelTile({ kernel, cellSize, label, labelEn }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 1,
+        padding: 2, background: 'rgba(245,158,11,0.18)', borderRadius: 4,
+      }}>
+        {kernel.flat().map((v, i) => (
+          <div key={i} style={{
+            width: cellSize, height: cellSize, background: window.weightColor(v),
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 7, fontFamily: 'var(--font-mono)', fontWeight: 600,
+            color: Math.abs(v) > 0.6 ? '#fff' : 'rgba(0,0,0,0.7)',
+          }}>{v.toFixed(1)}</div>
+        ))}
+      </div>
+      <div style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{labelEn}</div>
+    </div>
+  );
+}
+
+function OutputTile({ map, pos, cellSize, label, labelEn }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+      <div style={{ position: 'relative' }}>
+        <Heatmap data={map} size={map.length * cellSize} radius={3} />
+        {pos && (
+          <div style={{
+            position: 'absolute',
+            left: Math.min(pos.x, map.length - 1) * cellSize,
+            top: Math.min(pos.y, map.length - 1) * cellSize,
+            width: cellSize, height: cellSize,
+            border: '1.5px solid #f59e0b',
+            transition: 'left 200ms ease, top 200ms ease', borderRadius: 1,
+          }} />
+        )}
+      </div>
+      <div style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{labelEn}</div>
+    </div>
+  );
+}
+
+function BigGrid({ map, pos, kernel, cellSize }) {
+  return (
+    <div style={{ position: 'relative' }}>
+      <Heatmap data={map} size={map.length * cellSize} radius={4} />
+      <div style={{
+        position: 'absolute', left: pos.x * cellSize, top: pos.y * cellSize,
+        width: cellSize * 3, height: cellSize * 3,
+        border: '2px solid #f59e0b',
+        boxShadow: '0 0 0 2px rgba(245,158,11,0.25), 0 4px 12px rgba(245,158,11,0.4)',
+        transition: 'left 200ms ease, top 200ms ease', borderRadius: 2,
+        background: 'rgba(245,158,11,0.05)',
+      }} />
+    </div>
+  );
+}
+
+function OutputBigGrid({ map, pos, cellSize }) {
+  // visited cells determined by row-major fill — show progress
+  const cx = Math.min(pos.x, map.length - 1);
+  const cy = Math.min(pos.y, map.length - 1);
+  return (
+    <div style={{ position: 'relative' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${map.length}, ${cellSize}px)`, gap: 0, borderRadius: 4, overflow: 'hidden' }}>
+        {map.flatMap((row, y) => row.map((v, x) => {
+          const visited = (y < cy) || (y === cy && x <= cx);
+          return (
+            <div key={`${x}-${y}`} style={{
+              width: cellSize, height: cellSize,
+              background: visited ? window.actColor(v) : '#f0f0ee',
+              opacity: visited ? 1 : 0.4,
+              transition: 'opacity 200ms ease',
+            }} />
+          );
+        }))}
+      </div>
+      <div style={{
+        position: 'absolute', left: cx * cellSize, top: cy * cellSize,
+        width: cellSize, height: cellSize,
+        border: '2px solid #f59e0b',
+        boxShadow: '0 0 0 2px rgba(245,158,11,0.3)',
+        transition: 'left 200ms ease, top 200ms ease',
+      }} />
+    </div>
+  );
+}
+
+// ─── S6 L2 Flatten ────────────────────────────────────────────────────
+function ScreenL2Flatten({ catIndex, onBack }) {
+  // Use last pool layer
+  const data = NETWORK_DATA[catIndex];
+  const map = data['pool_2'][0];
+  const flat = map.flat();
+  const [t, setT] = uS4(0);
+  uE4(() => {
+    let raf;
+    const start = performance.now();
+    const animate = (now) => {
+      const dt = (now - start) / 1500;
+      setT(Math.min(1, dt));
+      if (dt < 1) raf = requestAnimationFrame(animate);
+    };
+    raf = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  return (
+    <div style={{ width: '100%', height: '100%', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
+      <div style={{
+        padding: '60px 16px 8px', display: 'flex', alignItems: 'center', gap: 10,
+        borderBottom: '0.5px solid var(--separator)',
+      }}>
+        <button onClick={() => { haptic(); onBack && onBack(); }} style={{
+          width: 34, height: 34, borderRadius: 17, border: 'none',
+          background: 'var(--bg-card)', boxShadow: 'var(--shadow-1)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <svg width="14" height="14" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7" stroke="#3a3a40" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </button>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', letterSpacing: 0.5 }}>L2 · Flatten</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)' }}>把二维特征图拉直</div>
+        </div>
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px 60px' }}>
+        <div style={{ fontSize: 14, color: 'var(--text-2)', lineHeight: 1.65, marginBottom: 14 }}>
+          全连接层只认一维向量。这里我们把 13×13 的特征图按行展开成一根 169 维的「长条」。
+        </div>
+        <SectionTitle zh="二维特征图" en="2D feature map" />
+        <div style={{
+          padding: 16, borderRadius: 16, background: 'var(--bg-card)',
+          boxShadow: 'var(--shadow-1)', display: 'flex', justifyContent: 'center', marginBottom: 18,
+        }}>
+          <Heatmap data={map} size={map.length * 14} radius={6} />
+        </div>
+        <SectionTitle zh="拉直后的一维向量" en="flattened 1D vector" />
+        <div style={{
+          padding: 14, borderRadius: 16, background: 'var(--bg-card)', boxShadow: 'var(--shadow-1)',
+          overflowX: 'auto',
+        }}>
+          <div style={{ display: 'flex', gap: 1, height: 28 }}>
+            {flat.map((v, i) => {
+              const visible = (i / flat.length) <= t;
+              return (
+                <div key={i} style={{
+                  width: 4, flexShrink: 0, height: '100%',
+                  background: visible ? window.actColor(v) : '#f0f0ee',
+                  opacity: visible ? 1 : 0.3,
+                  transition: 'opacity 80ms ease',
+                }} />
+              );
+            })}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+            <span>0</span><span>{flat.length}</span>
+          </div>
+        </div>
+        <div style={{
+          marginTop: 14, padding: 12, borderRadius: 12,
+          background: 'rgba(245,158,11,0.08)',
+          fontSize: 12, color: 'var(--text-2)', lineHeight: 1.6,
+        }}>
+          <strong>小提示</strong> · Flatten 不改变任何数值,只是「换个排队方式」。
+        </div>
+        <button onClick={() => setT(0)} style={{
+          marginTop: 14, width: '100%', padding: 12, borderRadius: 12, border: 'none',
+          background: 'var(--brand-primary)', color: '#fff', fontWeight: 600,
+        }}>重新播放动画</button>
+      </div>
+    </div>
+  );
+}
+
+Object.assign(window, { ScreenL2Conv, ScreenL2Flatten });
+
+</script>
+
+<!-- ===== src/screens/screens-l3.jsx ===== -->
+<script type="text/babel">
+/* global React, CATEGORIES, LAYERS, NETWORK_DATA, CNN, Heatmap, weightColor, actColor, haptic */
+const { useState: uS5, useEffect: uE5, useMemo: uM5 } = React;
+
+// ─── S7 L3 — formula view, 4 variants ────────────────────────────────
+function ScreenL3({ kind = 'conv', catIndex, layerIndex, channelIndex, onBack }) {
+  const [tab, setTab] = uS5(kind);
+  const tabs = [
+    { id: 'conv', name: 'Conv', zh: '卷积' },
+    { id: 'relu', name: 'ReLU', zh: 'ReLU' },
+    { id: 'pool', name: 'Pool', zh: '池化' },
+    { id: 'softmax', name: 'Softmax', zh: 'Softmax' },
+  ];
+  return (
+    <div style={{ width: '100%', height: '100%', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
+      <div style={{
+        padding: '60px 16px 8px', display: 'flex', alignItems: 'center', gap: 10,
+        borderBottom: '0.5px solid var(--separator)',
+      }}>
+        <button onClick={() => { haptic(); onBack && onBack(); }} style={{
+          width: 34, height: 34, borderRadius: 17, border: 'none',
+          background: 'var(--bg-card)', boxShadow: 'var(--shadow-1)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6" stroke="#3a3a40" strokeWidth="2" fill="none" strokeLinecap="round"/></svg>
+        </button>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', letterSpacing: 0.5 }}>L3 · 公式视图</div>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>每一格,具体怎么算?</div>
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 4, padding: '10px 14px', borderBottom: '0.5px solid var(--separator)' }}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => { haptic(); setTab(t.id); }} style={{
+            padding: '8px 14px', borderRadius: 100, border: 'none',
+            background: tab === t.id ? 'var(--brand-primary)' : 'var(--bg-card)',
+            color: tab === t.id ? '#fff' : 'var(--text-2)',
+            fontSize: 13, fontWeight: 600,
+            boxShadow: tab === t.id ? 'none' : 'var(--shadow-1)',
+          }}>{t.zh}</button>
+        ))}
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px 60px' }}>
+        {tab === 'conv' && <ConvFormula catIndex={catIndex} layerIndex={layerIndex || 1} channelIndex={channelIndex || 0} />}
+        {tab === 'relu' && <ReLUFormula />}
+        {tab === 'pool' && <PoolFormula catIndex={catIndex} />}
+        {tab === 'softmax' && <SoftmaxFormula catIndex={catIndex} />}
+      </div>
+    </div>
+  );
+}
+
+function ConvFormula({ catIndex, layerIndex, channelIndex }) {
+  const layer = LAYERS[layerIndex];
+  const prev = LAYERS[layerIndex - 1];
+  const inputMap = NETWORK_DATA[catIndex][prev.id][0];
+  // 真权重 — 跟 catIndex 无关
+  const kernel = uM5(() => CNN.getKernelSlice(layer.id, channelIndex) || [[0,0,0],[0,0,0],[0,0,0]], [layer.id, channelIndex]);
+  const [pos, setPos] = uS5({ x: 5, y: 5 });
+
+  const N = inputMap.length;
+  const slice = [0,1,2].map(dy => [0,1,2].map(dx => inputMap[Math.min(N-1, pos.y + dy)]?.[Math.min(N-1, pos.x + dx)] ?? 0));
+
+  const dragRef = uM5(() => ({ active: false }), []);
+  const containerRef = React.useRef(null);
+  const cellSize = 18;
+
+  const onPointerDown = (e) => {
+    dragRef.active = true;
+    onPointerMove(e);
+  };
+  const onPointerMove = (e) => {
+    if (!dragRef.active) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const cx = (e.clientX - rect.left) / cellSize;
+    const cy = (e.clientY - rect.top) / cellSize;
+    setPos({
+      x: Math.max(0, Math.min(N - 3, Math.round(cx - 1.5))),
+      y: Math.max(0, Math.min(N - 3, Math.round(cy - 1.5))),
+    });
+  };
+  const onPointerUp = () => { dragRef.active = false; };
+
+  return (
+    <div>
+      <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6, marginBottom: 14 }}>
+        卷积 = 输入的一个 3×3 小窗口,逐格乘以卷积核,再把 9 个数加起来。<br/>
+        <span style={{ color: 'var(--text-3)', fontSize: 12 }}>拖动黄框,看每个位置的具体计算。</span>
+      </div>
+
+      {/* Big input with draggable frame */}
+      <div style={{
+        padding: 16, borderRadius: 16, background: 'var(--bg-card)',
+        boxShadow: 'var(--shadow-1)', marginBottom: 14, display: 'flex', justifyContent: 'center',
+      }}>
+        <div ref={containerRef}
+             onPointerDown={onPointerDown}
+             onPointerMove={onPointerMove}
+             onPointerUp={onPointerUp}
+             onPointerCancel={onPointerUp}
+             style={{ position: 'relative', touchAction: 'none', cursor: 'grab' }}>
+          <Heatmap data={inputMap} size={N * cellSize} radius={4} />
+          <div style={{
+            position: 'absolute', left: pos.x * cellSize, top: pos.y * cellSize,
+            width: cellSize * 3, height: cellSize * 3,
+            border: '2px solid #f59e0b',
+            boxShadow: '0 0 0 2px rgba(245,158,11,0.25)',
+            transition: 'left 100ms ease, top 100ms ease', borderRadius: 2,
+            background: 'rgba(245,158,11,0.04)',
+          }} />
+        </div>
+      </div>
+
+      {/* Equation: matrix · kernel */}
+      <div style={{
+        padding: 16, borderRadius: 16, background: 'var(--bg-card)',
+        boxShadow: 'var(--shadow-1)', marginBottom: 14,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
+          <Mat3 values={slice} fmt={actColor} />
+          <span style={{ fontSize: 22, color: 'var(--text-3)' }}>⊙</span>
+          <Mat3 values={kernel} fmt={weightColor} />
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-around', fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginTop: 8 }}>
+          <span>3×3 输入切片</span>
+          <span>3×3 卷积核</span>
+        </div>
+      </div>
+
+      <SumStrip values={slice.flat().map((v, i) => v * kernel[Math.floor(i/3)][i%3])} />
+    </div>
+  );
+}
+
+function Mat3({ values, fmt }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 2, padding: 3, background: 'rgba(0,0,0,0.04)', borderRadius: 4 }}>
+      {values.flat().map((v, i) => (
+        <div key={i} style={{
+          width: 30, height: 30, borderRadius: 2, background: fmt(v),
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 9, fontFamily: 'var(--font-mono)', fontWeight: 700,
+          color: Math.abs(v) > 0.5 ? '#fff' : 'rgba(0,0,0,0.7)',
+        }}>{v.toFixed(1)}</div>
+      ))}
+    </div>
+  );
+}
+
+function SumStrip({ values }) {
+  const sum = values.reduce((a, b) => a + b, 0);
+  return (
+    <div style={{
+      padding: 14, borderRadius: 16, background: 'var(--bg-card)',
+      boxShadow: 'var(--shadow-1)',
+    }}>
+      <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>逐项相乘后求和</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+        {values.map((v, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <span style={{ color: 'var(--text-3)' }}>+</span>}
+            <span style={{
+              padding: '2px 5px', borderRadius: 3,
+              background: v >= 0 ? 'rgba(37,99,235,0.10)' : 'rgba(220,38,38,0.10)',
+              color: v >= 0 ? '#1e3a8a' : '#991b1b',
+            }}>{v >= 0 ? '+' : ''}{v.toFixed(2)}</span>
+          </React.Fragment>
+        ))}
+        <span style={{ color: 'var(--text-3)' }}>=</span>
+        <span style={{
+          padding: '4px 10px', borderRadius: 6, background: 'var(--brand-accent)', color: '#3a2a05',
+          fontSize: 13, fontWeight: 700,
+        }}>{sum >= 0 ? '+' : ''}{sum.toFixed(2)}</span>
+      </div>
+    </div>
+  );
+}
+
+function ReLUFormula() {
+  const [x, setX] = uS5(-0.4);
+  const y = Math.max(0, x);
+  return (
+    <div>
+      <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6, marginBottom: 14 }}>
+        <strong>ReLU</strong> = 把负数全部归零,正数保持不变。简单粗暴,但出奇地有用。
+      </div>
+
+      <div style={{
+        padding: 18, borderRadius: 16, background: 'var(--bg-card)', boxShadow: 'var(--shadow-1)', marginBottom: 14,
+      }}>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 22, textAlign: 'center', color: 'var(--text)', marginBottom: 6 }}>
+          f(x) = max(0, x)
+        </div>
+        <ReLUChart x={x} />
+        <input type="range" min="-1" max="1" step="0.01" value={x} onChange={e => setX(parseFloat(e.target.value))}
+          style={{ width: '100%', accentColor: '#1e3a8a', marginTop: 8 }} />
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)' }}>
+          <span>x = {x.toFixed(2)}</span>
+          <span style={{ color: y > 0 ? '#1e3a8a' : '#991b1b' }}>f(x) = {y.toFixed(2)}</span>
+        </div>
+      </div>
+
+      <div style={{ padding: 14, borderRadius: 16, background: 'var(--bg-card)', boxShadow: 'var(--shadow-1)' }}>
+        <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>整张特征图过 ReLU 前后</div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-around' }}>
+          {(() => {
+            const m = NETWORK_DATA[0]['conv_1_1'][0];
+            const after = m.map(r => r.map(v => Math.max(0, v)));
+            return (
+              <>
+                <Heatmap data={m} size={120} radius={6} />
+                <span style={{ fontSize: 22, color: 'var(--text-3)' }}>→</span>
+                <Heatmap data={after} size={120} radius={6} />
+              </>
+            );
+          })()}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReLUChart({ x }) {
+  const W = 280, H = 130, cx = W/2, cy = H - 20;
+  const px = cx + x * 100;
+  const py = cy - Math.max(0, x) * 100;
+  return (
+    <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
+      <line x1="0" y1={cy} x2={W} y2={cy} stroke="rgba(0,0,0,0.15)"/>
+      <line x1={cx} y1="0" x2={cx} y2={H} stroke="rgba(0,0,0,0.15)"/>
+      <path d={`M 0 ${cy} L ${cx} ${cy} L ${W} ${cy - 100}`} stroke="#1e3a8a" strokeWidth="2.5" fill="none" strokeLinejoin="round"/>
+      <circle cx={px} cy={py} r="6" fill="#f59e0b" stroke="#fff" strokeWidth="2"/>
+      <line x1={px} y1={cy} x2={px} y2={py} stroke="#f59e0b" strokeDasharray="2 3"/>
+    </svg>
+  );
+}
+
+function PoolFormula({ catIndex }) {
+  const m = NETWORK_DATA[catIndex]['relu_2_2'][0];
+  const block = m.slice(0, 2).map(r => r.slice(0, 2));
+  const max = Math.max(...block.flat());
+  return (
+    <div>
+      <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6, marginBottom: 14 }}>
+        <strong>最大池化</strong> = 把 2×2 窗口里最大的那个值留下,其它三个扔掉。让特征图缩小一半,但保留最强的信号。
+      </div>
+      <div style={{ padding: 18, borderRadius: 16, background: 'var(--bg-card)', boxShadow: 'var(--shadow-1)', marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-around', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 2 }}>
+            {block.flat().map((v, i) => (
+              <div key={i} style={{
+                width: 50, height: 50, borderRadius: 4,
+                background: actColor(v),
+                border: v === max ? '2.5px solid #f59e0b' : '0.5px solid rgba(0,0,0,0.1)',
+                boxShadow: v === max ? '0 0 0 2px rgba(245,158,11,0.3)' : 'none',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 12,
+                color: Math.abs(v) > 0.5 ? '#fff' : 'rgba(0,0,0,0.7)',
+              }}>{v.toFixed(2)}</div>
+            ))}
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--text-3)' }}>取最大 →</div>
+          <div style={{
+            width: 56, height: 56, borderRadius: 6, background: actColor(max),
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 13,
+            color: Math.abs(max) > 0.5 ? '#fff' : 'rgba(0,0,0,0.7)',
+            boxShadow: '0 4px 12px rgba(245,158,11,0.3)',
+            border: '2px solid #f59e0b',
+          }}>{max.toFixed(2)}</div>
+        </div>
+      </div>
+      <div style={{ padding: 14, borderRadius: 16, background: 'var(--bg-card)', boxShadow: 'var(--shadow-1)' }}>
+        <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>整张特征图池化前后</div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-around' }}>
+          <Heatmap data={NETWORK_DATA[catIndex]['relu_2_2'][0]} size={130} radius={6} />
+          <span style={{ fontSize: 22, color: 'var(--text-3)' }}>→</span>
+          <Heatmap data={NETWORK_DATA[catIndex]['pool_2'][0]} size={130} radius={6} />
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-around', fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginTop: 4 }}>
+          <span>26×26</span><span>13×13</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SoftmaxFormula({ catIndex }) {
+  const probs = NETWORK_DATA[catIndex].output[0];
+  return (
+    <div>
+      <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6, marginBottom: 14 }}>
+        <strong>Softmax</strong> = 把一组任意大小的「打分」变成 10 个加起来等于 1 的「概率」。最高的那个就是模型的判断。
+      </div>
+      <div style={{ padding: 18, borderRadius: 16, background: 'var(--bg-card)', boxShadow: 'var(--shadow-1)', marginBottom: 14 }}>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 14, textAlign: 'center', color: 'var(--text)', lineHeight: 1.8 }}>
+          softmax(z)<sub style={{ fontSize: 9 }}>i</sub> = e<sup style={{ fontSize: 9 }}>z<sub style={{ fontSize: 7 }}>i</sub></sup> / Σ e<sup style={{ fontSize: 9 }}>z<sub style={{ fontSize: 7 }}>j</sub></sup>
+        </div>
+      </div>
+      <div style={{ padding: 14, borderRadius: 16, background: 'var(--bg-card)', boxShadow: 'var(--shadow-1)' }}>
+        <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>10 类概率(总和 = 1.000)</div>
+        {probs.map((p, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
+            <span style={{ fontSize: 14, width: 22 }}>{CATEGORIES[i].emoji}</span>
+            <span style={{ fontSize: 12, color: 'var(--text)', minWidth: 70 }}>{CATEGORIES[i].zh}</span>
+            <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'rgba(0,0,0,0.06)', overflow: 'hidden' }}>
+              <div style={{ width: `${p*100}%`, height: '100%', background: i === catIndex ? 'var(--brand-accent)' : 'var(--brand-primary-2)' }} />
+            </div>
+            <span className="mono" style={{ fontSize: 11, color: 'var(--text-2)', minWidth: 42, textAlign: 'right' }}>{(p*100).toFixed(1)}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+Object.assign(window, { ScreenL3 });
+
+</script>
+
+<!-- ===== src/screens/screens-rest.jsx ===== -->
+<script type="text/babel">
+/* global React, CATEGORIES, ImageThumb, haptic */
+const { useState: uS6, useEffect: uE6 } = React;
+
+// ─── S8 Image Picker (modal sheet) ───────────────────────────────────
+function ScreenImagePicker({ catIndex, onPick, onClose }) {
+  return (
+    <div style={{
+      position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.32)',
+      display: 'flex', flexDirection: 'column', justifyContent: 'flex-end',
+      animation: 'sheetFade 250ms ease-out both', zIndex: 100,
+    }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: 'var(--bg)', borderTopLeftRadius: 28, borderTopRightRadius: 28,
+        padding: '12px 16px 40px', maxHeight: '80%', overflowY: 'auto',
+        animation: 'sheetIn 320ms cubic-bezier(.2,.8,.2,1) both',
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 6 }}>
+          <div style={{ width: 36, height: 5, borderRadius: 3, background: 'var(--separator-strong)' }} />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 4px 14px' }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>选一张图试试</div>
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>整个网络会重新计算</div>
+          </div>
+          <button onClick={onClose} style={{
+            width: 32, height: 32, borderRadius: 16, border: 'none',
+            background: 'var(--bg-grouped)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6" stroke="#3a3a40" strokeWidth="2" fill="none" strokeLinecap="round"/></svg>
+          </button>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+          {CATEGORIES.map((c, i) => (
+            <button key={c.id} onClick={() => { haptic(); onPick && onPick(i); }} style={{
+              border: 'none', padding: 8, borderRadius: 14, background: 'transparent',
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+              outline: i === catIndex ? '2px solid var(--brand-accent)' : 'none',
+              outlineOffset: -2,
+              backgroundColor: i === catIndex ? 'rgba(245,158,11,0.08)' : 'transparent',
+            }}>
+              <ImageThumb catIndex={i} size={70} radius={10} />
+              <div style={{ fontSize: 12, color: 'var(--text)', fontWeight: i === catIndex ? 600 : 500 }}>{c.zh}</div>
+              <div style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{c.en}</div>
+            </button>
+          ))}
+        </div>
+        <button style={{
+          marginTop: 16, width: '100%', padding: 14, borderRadius: 14, border: '1px dashed var(--separator-strong)',
+          background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+          color: 'var(--text-2)', fontSize: 14,
+        }}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.4"/>
+            <circle cx="5.5" cy="6" r="1" fill="currentColor"/>
+            <path d="M2 11l3.5-3 3 2.5L11 8l3 3" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinejoin="round"/>
+          </svg>
+          从相册上传
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── S9 Tutorial article ─────────────────────────────────────────────
+function ScreenTutorial({ onBack }) {
+  return (
+    <div style={{ width: '100%', height: '100%', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
+      <div style={{
+        padding: '60px 16px 8px', display: 'flex', alignItems: 'center', gap: 10,
+        borderBottom: '0.5px solid var(--separator)',
+      }}>
+        <button onClick={() => { haptic(); onBack && onBack(); }} style={{
+          width: 34, height: 34, borderRadius: 17, border: 'none',
+          background: 'var(--bg-card)', boxShadow: 'var(--shadow-1)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <svg width="9" height="14" viewBox="0 0 10 16"><path d="M8 1L2 8l6 7" stroke="#3a3a40" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </button>
+        <div style={{ flex: 1, fontSize: 15, fontWeight: 600 }}>CNN 教程</div>
+        <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>~5 min</div>
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '20px 22px 60px' }}>
+        <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--brand-primary)', letterSpacing: 1 }}>第 1 章</div>
+        <h1 style={{ fontSize: 26, fontWeight: 700, marginTop: 6, marginBottom: 14, letterSpacing: -0.3, lineHeight: 1.25 }}>
+          为什么需要卷积神经网络?
+        </h1>
+        <p style={{ fontSize: 15, color: 'var(--text-2)', lineHeight: 1.7 }}>
+          想象你要教一台计算机识别熊猫。最直觉的办法是把图片每一个像素都喂给它——但一张 64×64 的彩色图就有 12,288 个数字。如果直接连起来,参数量爆炸,模型还学不会「熊猫的眼睛在哪里都是熊猫」这件事。
+        </p>
+        <p style={{ fontSize: 15, color: 'var(--text-2)', lineHeight: 1.7, marginTop: 14 }}>
+          <strong>卷积</strong>给出了一个聪明的答案:用一个小窗口在图上滑动,反复检测「这一小块像不像我要找的图案」。这个小窗口叫做<span style={{ background: 'rgba(245,158,11,0.18)', borderBottom: '1px dashed #f59e0b', padding: '0 3px', borderRadius: 2 }}>卷积核 (kernel)</span>——你可以把它理解成一个会「扫描」图像的小放大镜。
+        </p>
+
+        <SuperParamsWidget />
+
+        <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--brand-primary)', letterSpacing: 1, marginTop: 28 }}>第 2 章</div>
+        <h2 style={{ fontSize: 22, fontWeight: 700, marginTop: 6, marginBottom: 14, letterSpacing: -0.2, lineHeight: 1.3 }}>
+          ReLU:简单粗暴的非线性
+        </h2>
+        <p style={{ fontSize: 15, color: 'var(--text-2)', lineHeight: 1.7 }}>
+          一堆线性运算叠加起来,数学上还是一个线性运算——网络再深也学不会复杂图案。
+          ReLU 干的事简单到离谱:负数变 0,正数不变。但正是这个「掐掉一半」的小操作,让神经网络具备了「灵活」的本事。
+        </p>
+
+        <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--brand-primary)', letterSpacing: 1, marginTop: 28 }}>第 3 章</div>
+        <h2 style={{ fontSize: 22, fontWeight: 700, marginTop: 6, marginBottom: 14, letterSpacing: -0.2 }}>
+          为什么要池化?
+        </h2>
+        <p style={{ fontSize: 15, color: 'var(--text-2)', lineHeight: 1.7 }}>
+          特征图越大,越费算力。最大池化每 2×2 区域留下一个最强信号,
+          相当于「这一片有没有我要的图案」的概要——保留信息精华,扔掉位置细节,顺便让网络能看到更大范围的图案。
+        </p>
+
+        <div style={{
+          marginTop: 24, padding: 16, borderRadius: 16,
+          background: 'linear-gradient(135deg, rgba(30,58,138,0.06) 0%, rgba(245,158,11,0.06) 100%)',
+          border: '0.5px solid var(--separator)',
+        }}>
+          <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-3)', letterSpacing: 1 }}>下一步</div>
+          <div style={{ fontSize: 16, fontWeight: 600, marginTop: 4, color: 'var(--text)' }}>动手玩玩可视化吧</div>
+          <div style={{ fontSize: 13, color: 'var(--text-2)', marginTop: 6, lineHeight: 1.5 }}>
+            理论看完了。回到 L1 总览,点一点任意一个方块,看看它内部到底在干什么。
+          </div>
+          <button onClick={() => { haptic(); onBack && onBack(); }} style={{
+            marginTop: 12, padding: '8px 14px', borderRadius: 100, border: 'none',
+            background: 'var(--brand-primary)', color: '#fff', fontSize: 13, fontWeight: 600,
+          }}>
+            返回 →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SuperParamsWidget() {
+  const [kSize, setKSize] = uS6(3);
+  const [stride, setStride] = uS6(1);
+  const inSize = 8;
+  const outSize = Math.floor((inSize - kSize) / stride) + 1;
+  return (
+    <div style={{
+      marginTop: 18, padding: 16, borderRadius: 16, background: 'var(--bg-card)',
+      boxShadow: 'var(--shadow-1)', border: '0.5px solid var(--separator)',
+    }}>
+      <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-3)', letterSpacing: 0.5, marginBottom: 8 }}>
+        互动 · INTERACTIVE
+      </div>
+      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>调一调超参数,看输出尺寸怎么变</div>
+      <div style={{ display: 'flex', gap: 16 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>kernel size</div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[2,3,4,5].map(s => (
+              <button key={s} onClick={() => setKSize(s)} style={{
+                flex: 1, padding: '6px 0', borderRadius: 6, border: 'none',
+                background: kSize === s ? 'var(--brand-primary)' : 'var(--bg-grouped)',
+                color: kSize === s ? '#fff' : 'var(--text-2)',
+                fontSize: 12, fontFamily: 'var(--font-mono)',
+              }}>{s}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>stride</div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[1,2,3].map(s => (
+              <button key={s} onClick={() => setStride(s)} style={{
+                flex: 1, padding: '6px 0', borderRadius: 6, border: 'none',
+                background: stride === s ? 'var(--brand-primary)' : 'var(--bg-grouped)',
+                color: stride === s ? '#fff' : 'var(--text-2)',
+                fontSize: 12, fontFamily: 'var(--font-mono)',
+              }}>{s}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div style={{ marginTop: 14, padding: 10, borderRadius: 10, background: 'rgba(30,58,138,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-around', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+        <div>
+          <div style={{ fontSize: 9, color: 'var(--text-3)' }}>输入</div>
+          <div style={{ color: 'var(--text)', fontWeight: 600 }}>{inSize}×{inSize}</div>
+        </div>
+        <div style={{ color: 'var(--text-3)' }}>→</div>
+        <div>
+          <div style={{ fontSize: 9, color: 'var(--text-3)' }}>输出</div>
+          <div style={{ color: 'var(--brand-primary)', fontWeight: 700, fontSize: 14 }}>{outSize}×{outSize}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── S10 Settings ────────────────────────────────────────────────────
+function ScreenSettings({ onBack, lang, setLang, dark, setDark }) {
+  const Row = ({ icon, title, detail, onClick, last, danger }) => (
+    <button onClick={onClick} style={{
+      width: '100%', padding: '14px 16px', border: 'none', background: 'transparent',
+      display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left',
+      borderBottom: last ? 'none' : '0.5px solid var(--separator)',
+    }}>
+      <div style={{
+        width: 30, height: 30, borderRadius: 7,
+        background: icon.bg, color: '#fff',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 14,
+      }}>{icon.glyph}</div>
+      <div style={{ flex: 1, fontSize: 15, color: danger ? '#dc2626' : 'var(--text)' }}>{title}</div>
+      {detail && <span style={{ fontSize: 14, color: 'var(--text-3)' }}>{detail}</span>}
+      <svg width="7" height="12" viewBox="0 0 8 14"><path d="M1 1l6 6-6 6" stroke="rgba(60,60,67,0.3)" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+    </button>
+  );
+  return (
+    <div style={{ width: '100%', height: '100%', background: 'var(--bg-grouped)', display: 'flex', flexDirection: 'column' }}>
+      <div style={{
+        padding: '60px 16px 8px', display: 'flex', alignItems: 'center', gap: 10,
+        background: 'var(--bg)',
+      }}>
+        <button onClick={() => { haptic(); onBack && onBack(); }} style={{
+          width: 34, height: 34, borderRadius: 17, border: 'none',
+          background: 'var(--bg-card)', boxShadow: 'var(--shadow-1)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <svg width="9" height="14" viewBox="0 0 10 16"><path d="M8 1L2 8l6 7" stroke="#3a3a40" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </button>
+        <div style={{ flex: 1, fontSize: 17, fontWeight: 600 }}>设置</div>
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '20px 16px 60px' }}>
+        <SectionHeader title="外观" />
+        <div style={{ background: 'var(--bg-card)', borderRadius: 14, overflow: 'hidden', boxShadow: 'var(--shadow-1)' }}>
+          <div style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', borderBottom: '0.5px solid var(--separator)' }}>
+            <div style={{ width: 30, height: 30, borderRadius: 7, background: '#1e3a8a', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, marginRight: 12 }}>🌙</div>
+            <div style={{ flex: 1, fontSize: 15 }}>深色模式</div>
+            <Toggle on={dark} onChange={setDark} />
+          </div>
+          <div style={{ padding: '14px 16px', display: 'flex', alignItems: 'center' }}>
+            <div style={{ width: 30, height: 30, borderRadius: 7, background: '#f59e0b', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, marginRight: 12, fontWeight: 700 }}>文</div>
+            <div style={{ flex: 1, fontSize: 15 }}>语言</div>
+            <div style={{ display: 'flex', gap: 4, padding: 2, background: 'var(--bg-grouped)', borderRadius: 8 }}>
+              {[['zh','中文'], ['en','EN']].map(([k,v]) => (
+                <button key={k} onClick={() => setLang(k)} style={{
+                  padding: '4px 10px', borderRadius: 6, border: 'none',
+                  background: lang === k ? '#fff' : 'transparent',
+                  color: lang === k ? 'var(--text)' : 'var(--text-3)',
+                  fontSize: 12, fontWeight: 600,
+                  boxShadow: lang === k ? '0 1px 2px rgba(0,0,0,0.1)' : 'none',
+                }}>{v}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <SectionHeader title="可视化" />
+        <div style={{ background: 'var(--bg-card)', borderRadius: 14, overflow: 'hidden', boxShadow: 'var(--shadow-1)' }}>
+          <Row icon={{ glyph: '⏵', bg: '#10b981' }} title="动画速度" detail="中" />
+          <Row icon={{ glyph: '◐', bg: '#a21caf' }} title="色阶图例" detail="始终显示" last />
+        </div>
+
+        <SectionHeader title="关于" />
+        <div style={{ background: 'var(--bg-card)', borderRadius: 14, overflow: 'hidden', boxShadow: 'var(--shadow-1)' }}>
+          <Row icon={{ glyph: 'ⓘ', bg: '#3b5bdb' }} title="关于 NeuroVis" detail="v0.1" />
+          <Row icon={{ glyph: '✉', bg: '#0ea5e9' }} title="反馈" />
+          <Row icon={{ glyph: '★', bg: '#f59e0b' }} title="评分" last />
+        </div>
+
+        <div style={{ marginTop: 24, textAlign: 'center', fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+          NeuroVis v0.1 · MVP<br/>
+          inspired by CNN Explainer
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SectionHeader({ title }) {
+  return (
+    <div style={{
+      fontSize: 12, color: 'var(--text-3)', textTransform: 'uppercase',
+      letterSpacing: 0.5, padding: '20px 16px 8px', fontFamily: 'var(--font-mono)',
+    }}>{title}</div>
+  );
+}
+
+function Toggle({ on, onChange }) {
+  return (
+    <button onClick={() => { haptic(); onChange && onChange(!on); }} style={{
+      width: 50, height: 30, borderRadius: 15, border: 'none', padding: 2,
+      background: on ? '#34c759' : '#e5e5ea',
+      transition: 'background 200ms ease',
+      display: 'flex', alignItems: 'center',
+    }}>
+      <div style={{
+        width: 26, height: 26, borderRadius: 13, background: '#fff',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+        transform: `translateX(${on ? 20 : 0}px)`,
+        transition: 'transform 200ms ease',
+      }} />
+    </button>
+  );
+}
+
+Object.assign(window, { ScreenImagePicker, ScreenTutorial, ScreenSettings });
+
+</script>
+
+<!-- ===== src/app.jsx ===== -->
+<script type="text/babel">
+/* global React, ReactDOM, IOSDevice, ScreenSplash, ScreenOnboarding, ScreenHome,
+   ScreenCNNEntry, ScreenL1, ScreenL2Conv, ScreenL2Flatten, ScreenL3, ScreenImagePicker,
+   ScreenTutorial, ScreenSettings, TweaksPanel, useTweaks, TweakSection, TweakRadio, TweakToggle, TweakSlider, LAYERS */
+const { useState: uSA, useEffect: uEA, useRef: uRA } = React;
+
+const TWEAK_DEFAULS = /*EDITMODE-BEGIN*/{
+  "startScreen": "splash",
+  "showLandscapeHint": true,
+  "animSpeed": "medium"
+}/*EDITMODE-END*/;
+
+// App mode: full-bleed render (no fake iPhone frame, no debug panels).
+// Triggered by ?app=1, or auto-on when viewport looks like a phone.
+function useAppMode() {
+  const detect = () => {
+    if (typeof window === 'undefined') return false;
+    const q = new URLSearchParams(window.location.search).get('app');
+    if (q === '1') return true;
+    if (q === '0') return false;
+    return window.matchMedia('(max-width: 540px)').matches;
+  };
+  const [on, setOn] = uSA(detect);
+  uEA(() => {
+    const mq = window.matchMedia('(max-width: 540px)');
+    const h = () => setOn(detect());
+    mq.addEventListener('change', h);
+    return () => mq.removeEventListener('change', h);
+  }, []);
+  uEA(() => {
+    document.body.classList.toggle('app-mode', on);
+  }, [on]);
+  return on;
+}
+
+function App() {
+  const appMode = useAppMode();
+  const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULS);
+  const [route, setRoute] = uSA({ name: tweaks.startScreen || 'splash' });
+  const [history, setHistory] = uSA([]);
+  const [catIndex, setCatIndex] = uSA(0);
+  const [pickerOpen, setPickerOpen] = uSA(false);
+  const [computeWave, setComputeWave] = uSA({});
+  const [orient, setOrient] = uSA('portrait'); // portrait | landscape
+  const [dark, setDark] = uSA(false);
+  const [lang, setLang] = uSA('zh');
+
+  uEA(() => {
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  }, [dark]);
+
+  uEA(() => {
+    if (tweaks.startScreen) setRoute({ name: tweaks.startScreen });
+  }, [tweaks.startScreen]);
+
+  const go = (name, params = {}) => {
+    setHistory(h => [...h, route]);
+    setRoute({ name, ...params });
+  };
+  const back = () => {
+    setHistory(h => {
+      if (h.length === 0) { setRoute({ name: 'home' }); return h; }
+      const prev = h[h.length - 1];
+      setRoute(prev);
+      return h.slice(0, -1);
+    });
+  };
+  const reset = (name) => { setHistory([]); setRoute({ name }); };
+
+  // Trigger recompute wave when category changes
+  const triggerWave = () => {
+    const wave = {};
+    LAYERS.forEach((_, i) => {
+      setTimeout(() => {
+        setComputeWave(prev => ({ ...prev, [i]: Date.now() }));
+      }, i * 90);
+    });
+    setTimeout(() => setComputeWave({}), 1500 + LAYERS.length * 90);
+  };
+
+  const handlePickCat = (i) => {
+    setCatIndex(i);
+    setPickerOpen(false);
+    triggerWave();
+  };
+
+  // Frame size (portrait vs landscape)
+  const frameW = orient === 'portrait' ? 390 : 760;
+  const frameH = orient === 'portrait' ? 844 : 390;
+
+  const frameStyle = appMode ? {
+    width: '100vw', height: '100vh', minHeight: '100dvh',
+    overflow: 'hidden', position: 'relative',
+    background: 'var(--bg)',
+  } : {
+    width: frameW, height: frameH, borderRadius: orient === 'portrait' ? 48 : 48,
+    overflow: 'hidden', position: 'relative',
+    background: 'var(--bg)',
+    boxShadow: '0 40px 80px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.12), 0 0 0 12px #1a1a1c',
+    transition: 'width 400ms cubic-bezier(.2,.8,.2,1), height 400ms cubic-bezier(.2,.8,.2,1)',
+  };
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: appMode ? 0 : 12 }}>
+      <div style={frameStyle}>
+        {/* Dynamic island + status bar — only in desktop preview frame (real phone has its own) */}
+        {!appMode && (
+          <div style={{
+            position: 'absolute',
+            top: orient === 'portrait' ? 11 : '50%',
+            left: orient === 'portrait' ? '50%' : 11,
+            transform: orient === 'portrait' ? 'translateX(-50%)' : 'translateY(-50%) rotate(90deg)',
+            width: 126, height: 37, borderRadius: 24, background: '#000', zIndex: 200,
+            transformOrigin: 'center',
+          }} />
+        )}
+        {!appMode && orient === 'portrait' && (
+          <div style={{
+            position: 'absolute', top: 0, left: 0, right: 0, zIndex: 50, pointerEvents: 'none',
+            display: 'flex', justifyContent: 'space-between', padding: '18px 32px 8px', alignItems: 'center',
+          }}>
+            <span style={{ fontSize: 15, fontWeight: 600, color: dark ? '#fff' : '#000' }}>9:41</span>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <svg width="17" height="11" viewBox="0 0 17 11"><rect x="0" y="6" width="3" height="5" rx="0.5" fill={dark?'#fff':'#000'}/><rect x="4.5" y="4" width="3" height="7" rx="0.5" fill={dark?'#fff':'#000'}/><rect x="9" y="2" width="3" height="9" rx="0.5" fill={dark?'#fff':'#000'}/><rect x="13.5" y="0" width="3" height="11" rx="0.5" fill={dark?'#fff':'#000'}/></svg>
+              <svg width="24" height="11" viewBox="0 0 24 11"><rect x="0.5" y="0.5" width="20" height="10" rx="3" stroke={dark?'#fff':'#000'} strokeOpacity="0.4" fill="none"/><rect x="2" y="2" width="17" height="7" rx="2" fill={dark?'#fff':'#000'}/></svg>
+            </div>
+          </div>
+        )}
+
+        {/* Screens */}
+        <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
+          {route.name === 'splash' && <ScreenSplash onDone={() => reset('onboarding')} />}
+          {route.name === 'onboarding' && <ScreenOnboarding onDone={() => reset('home')} />}
+          {route.name === 'home' && <ScreenHome onOpenCNN={() => go('cnn')} onOpenSettings={() => go('settings')} />}
+          {route.name === 'cnn' && <ScreenCNNEntry onBack={back} onStartViz={() => go('l1')} onStartTutorial={() => go('tutorial')} />}
+          {route.name === 'l1' && (
+            <ScreenL1
+              catIndex={catIndex}
+              onTapNeuron={(li, ci) => go('l2', { layerIndex: li, channelIndex: ci })}
+              onOpenImagePicker={() => setPickerOpen(true)}
+              onOpenTutorial={() => go('tutorial')}
+              onBack={back}
+              isLandscape={orient === 'landscape'}
+              computeWave={computeWave}
+              onToggleOrient={() => setOrient(o => o === 'portrait' ? 'landscape' : 'portrait')}
+            />
+          )}
+          {route.name === 'l2' && (
+            (() => {
+              const layer = LAYERS[route.layerIndex];
+              if (layer.kind === 'softmax') {
+                return <ScreenL3 kind="softmax" catIndex={catIndex} onBack={back} />;
+              }
+              return <ScreenL2Conv catIndex={catIndex} layerIndex={route.layerIndex} channelIndex={route.channelIndex} onBack={back} onOpenL3={() => go('l3', { l3Kind: layer.kind, layerIndex: route.layerIndex, channelIndex: route.channelIndex })} />;
+            })()
+          )}
+          {route.name === 'flatten' && <ScreenL2Flatten catIndex={catIndex} onBack={back} />}
+          {route.name === 'l3' && <ScreenL3 kind={route.l3Kind || 'conv'} catIndex={catIndex} layerIndex={route.layerIndex} channelIndex={route.channelIndex} onBack={back} />}
+          {route.name === 'tutorial' && <ScreenTutorial onBack={back} />}
+          {route.name === 'settings' && <ScreenSettings onBack={back} lang={lang} setLang={setLang} dark={dark} setDark={setDark} />}
+
+          {pickerOpen && <ScreenImagePicker catIndex={catIndex} onPick={handlePickCat} onClose={() => setPickerOpen(false)} />}
+        </div>
+
+        {/* Home indicator — only in desktop preview frame */}
+        {!appMode && (
+          <div style={{
+            position: 'absolute',
+            bottom: orient === 'portrait' ? 0 : '50%',
+            right: orient === 'portrait' ? 0 : 0,
+            left: orient === 'portrait' ? 0 : 'auto',
+            width: orient === 'portrait' ? '100%' : 34,
+            height: orient === 'portrait' ? 34 : '100%',
+            zIndex: 250, pointerEvents: 'none',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <div style={{
+              width: orient === 'portrait' ? 139 : 5,
+              height: orient === 'portrait' ? 5 : 139,
+              borderRadius: 100,
+              background: dark ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.25)',
+              marginBottom: orient === 'portrait' ? 8 : 0,
+              marginRight: orient === 'landscape' ? 8 : 0,
+            }} />
+          </div>
+        )}
+      </div>
+
+      {/* Quick screen jumper (visual aid) — hidden in app mode */}
+      {!appMode && <ScreenJumper route={route} reset={reset} go={go} />}
+
+      {!appMode && <TweaksPanel title="Tweaks">
+        <TweakSection title="Demo">
+          <TweakRadio label="起始屏" value={tweaks.startScreen} options={[
+            ['splash','启动'], ['onboarding','引导'], ['home','首页'], ['cnn','CNN 入口'], ['l1','L1 总览'],
+          ]} onChange={v => setTweak('startScreen', v)} />
+        </TweakSection>
+        <TweakSection title="可视化">
+          <TweakRadio label="动画速度" value={tweaks.animSpeed} options={[['slow','慢'],['medium','中'],['fast','快']]} onChange={v => setTweak('animSpeed', v)} />
+        </TweakSection>
+      </TweaksPanel>}
+    </div>
+  );
+}
+
+function ScreenJumper({ route, reset, go }) {
+  const screens = [
+    ['splash', 'S1 启动'],
+    ['onboarding', 'S11 引导'],
+    ['home', 'S2 首页'],
+    ['cnn', 'S3 CNN'],
+    ['l1', 'S4 L1'],
+    ['l2', 'S5 L2'],
+    ['flatten', 'S6 Flat'],
+    ['l3', 'S7 L3'],
+    ['tutorial', 'S9 教程'],
+    ['settings', 'S10 设置'],
+  ];
+  // Portal 到 #root 外面，避免被父级 transform: scale() 一起缩小
+  const host = document.getElementById('jumper-root');
+  const node = (
+    <div style={{
+      position: 'fixed', right: 'clamp(6px, 1vw, 16px)', top: '50%', transform: 'translateY(-50%)',
+      display: 'flex', flexDirection: 'column', gap: 'clamp(3px, 0.6vh, 8px)',
+      padding: 'clamp(6px, 1vh, 14px) clamp(6px, 0.8vw, 12px)',
+      background: 'rgba(255,255,255,0.88)', borderRadius: 16,
+      backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
+      boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+      zIndex: 1000,
+      maxHeight: '96vh', overflow: 'hidden',
+    }}>
+      {screens.map(([k, n]) => (
+        <button key={k} onClick={() => {
+          if (k === 'l2') reset('home');
+          else reset(k === 'splash' ? 'splash' : k);
+          if (k === 'l2') setTimeout(() => { go('cnn'); setTimeout(() => { go('l1'); setTimeout(() => go('l2', { layerIndex: 1, channelIndex: 0 }), 50); }, 50); }, 50);
+          if (k === 'flatten') setTimeout(() => go('flatten'), 50);
+          if (k === 'l3') setTimeout(() => go('l3', { l3Kind: 'conv', layerIndex: 1, channelIndex: 0 }), 50);
+        }} style={{
+          padding: 'clamp(4px, 0.7vh, 9px) clamp(8px, 1.1vw, 14px)',
+          borderRadius: 10, border: 'none',
+          background: route.name === k ? '#1e3a8a' : 'transparent',
+          color: route.name === k ? '#fff' : '#3a3a40',
+          fontSize: 'clamp(10px, 1.6vh, 16px)',
+          fontFamily: 'var(--font-mono)', fontWeight: 600,
+          cursor: 'pointer', textAlign: 'left', whiteSpace: 'nowrap',
+        }}>{n}</button>
+      ))}
+    </div>
+  );
+  return host ? ReactDOM.createPortal(node, host) : node;
+}
+
+// 等 CNN 把 10 个类别的真实激活算完再 mount。
+// 同时挂一个超时/错误兜底——VS Code Simple Browser 等弱 WebView 跑不了 TF.js 时给出明确提示。
+const _root = ReactDOM.createRoot(document.getElementById('root'));
+function splash(msg, sub) {
+  _root.render(
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12,
+      height: '100vh', padding: 24, textAlign: 'center',
+      fontFamily: 'var(--font-mono)', color: '#555',
+    }}>
+      <div style={{ fontSize: 14 }}>{msg}</div>
+      {sub && <div style={{ fontSize: 12, color: '#999', maxWidth: 320, lineHeight: 1.5 }}>{sub}</div>}
+    </div>
+  );
+}
+splash('正在跑 CNN 前向…');
+
+let _settled = false;
+// Babel standalone 用 XHR 单独加载 .jsx，不遵循 async=false 顺序，
+// 所以 app.jsx 可能比 data.js 先执行 → window.NETWORK_READY 还没定义。
+// 轮询等它出现。
+function attachWhenReady() {
+  if (window.NETWORK_READY) {
+    window.NETWORK_READY
+      .then(() => { _settled = true; _root.render(<App />); })
+      .catch(err => {
+        _settled = true;
+        console.error('[CNN] 初始化失败:', err);
+        splash('CNN 初始化失败', String(err && err.message || err));
+      });
+  } else {
+    setTimeout(attachWhenReady, 20);
+  }
+}
+attachWhenReady();
+
+// 把任何未捕获的错误显示到 splash，便于在没开 DevTools 时也能看到挂点
+window.addEventListener('error', e => {
+  if (_settled) return;
+  _settled = true;
+  splash('运行时错误', (e.message || 'unknown') + '  @  ' + (e.filename || '') + ':' + (e.lineno || ''));
+});
+window.addEventListener('unhandledrejection', e => {
+  if (_settled) return;
+  _settled = true;
+  splash('Promise rejection', String(e.reason && e.reason.message || e.reason));
+});
+
+// 5s 超时兜底：把当前运行时状态显示出来，方便定位
+setTimeout(() => {
+  if (_settled) return;
+  const status = [
+    'CNN: ' + (window.CNN ? 'loaded' : '✗ 缺失'),
+    'CNN_INPUTS: ' + (window.CNN_INPUTS ? 'loaded' : '✗ 缺失'),
+    'NETWORK_READY: ' + (window.NETWORK_READY ? 'pending' : '✗ 未定义'),
+    'NETWORK_DATA[0]: ' + (window.NETWORK_DATA && window.NETWORK_DATA[0] ? 'ready' : 'null'),
+  ].join(' · ');
+  splash('CNN 加载超时（5s）', status);
+}, 5000);
+
+</script>
+
+</body>
+</html>

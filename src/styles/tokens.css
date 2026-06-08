@@ -1,0 +1,130 @@
+/* NeuroVis design tokens */
+:root {
+  /* Brand */
+  --brand-primary: #1e3a8a;       /* deep blue */
+  --brand-primary-2: #2851d6;     /* lighter blue */
+  --brand-accent: #f59e0b;        /* warm amber for CTA / current */
+  --brand-accent-2: #fbbf24;
+
+  /* Base — warm off-white */
+  --bg: #fdfdfb;
+  --bg-elevated: #ffffff;
+  --bg-grouped: #f5f4ef;
+  --bg-card: #ffffff;
+  --separator: rgba(60,60,67,0.10);
+  --separator-strong: rgba(60,60,67,0.18);
+
+  /* Text */
+  --text: #0c0c0e;
+  --text-2: #3a3a40;
+  --text-3: rgba(60,60,67,0.6);
+  --text-4: rgba(60,60,67,0.3);
+
+  /* Activation legend (red-white-blue) */
+  --act-pos: #2563eb;
+  --act-neg: #dc2626;
+  --act-zero: #ffffff;
+
+  /* Weight legend (yellow-white-green) */
+  --w-pos: #10b981;
+  --w-neg: #eab308;
+
+  /* Layer kind tints (very subtle) */
+  --layer-conv: rgba(30, 58, 138, 0.08);
+  --layer-relu: rgba(245, 158, 11, 0.10);
+  --layer-pool: rgba(16, 185, 129, 0.10);
+  --layer-softmax: rgba(217, 70, 239, 0.10);
+  --layer-input: rgba(60,60,67,0.06);
+
+  /* Border accents per layer */
+  --layer-conv-edge: #1e3a8a;
+  --layer-relu-edge: #c2700a;
+  --layer-pool-edge: #047857;
+  --layer-softmax-edge: #a21caf;
+  --layer-input-edge: #4b5563;
+
+  /* Type */
+  --font-cn: "PingFang SC", "Hiragino Sans GB", system-ui, -apple-system, "SF Pro", sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
+
+  /* Radii */
+  --r-sm: 8px;
+  --r-md: 14px;
+  --r-lg: 22px;
+  --r-xl: 28px;
+
+  /* Shadows */
+  --shadow-1: 0 1px 2px rgba(20,20,40,0.04), 0 4px 12px rgba(20,20,40,0.04);
+  --shadow-2: 0 2px 6px rgba(20,20,40,0.06), 0 12px 32px rgba(20,20,40,0.08);
+  --shadow-3: 0 8px 24px rgba(20,20,40,0.10), 0 24px 60px rgba(20,20,40,0.14);
+}
+
+[data-theme="dark"] {
+  --bg: #0E0E10;
+  --bg-elevated: #1c1c1e;
+  --bg-grouped: #000;
+  --bg-card: #1c1c1e;
+  --separator: rgba(84,84,88,0.45);
+  --separator-strong: rgba(84,84,88,0.65);
+  --text: #ffffff;
+  --text-2: rgba(235,235,245,0.85);
+  --text-3: rgba(235,235,245,0.6);
+  --text-4: rgba(235,235,245,0.3);
+  --act-zero: #1c1c1e;
+  --layer-conv: rgba(96, 138, 255, 0.14);
+  --layer-relu: rgba(245, 158, 11, 0.16);
+  --layer-pool: rgba(16, 185, 129, 0.18);
+  --layer-softmax: rgba(217, 70, 239, 0.18);
+  --layer-input: rgba(255,255,255,0.06);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0; padding: 0;
+  font-family: var(--font-cn);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background: #e8e6df;
+  min-height: 100vh;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+
+.mono { font-family: var(--font-mono); font-feature-settings: "tnum"; }
+button { font-family: inherit; cursor: pointer; }
+
+@keyframes splashIn { from { opacity: 0; transform: translateY(8px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes splashCell { from { opacity: 0; transform: scale(0.4); } to { opacity: 1; transform: scale(1); } }
+@keyframes onbSlide { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes tilePulse { 0% { transform: scale(0.85); opacity: 0.4; } 50% { transform: scale(1); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+@keyframes spineDot { 0% { opacity: 0; transform: translateX(-8px) scale(0.4); } 40% { opacity: 1; transform: translateX(0) scale(1.4); } 100% { opacity: 0; transform: translateX(8px) scale(1); } }
+@keyframes softmaxIn { from { opacity: 0.5; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes sheetFade { from { background: rgba(0,0,0,0); } to { background: rgba(0,0,0,0.32); } }
+@keyframes convFadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sheetIn { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes convFlow { from { background-position: 0 0; } to { background-position: -12px 0; } }
+@keyframes convFlowDown { from { background-position: 0 0; } to { background-position: 0 -12px; } }
+@keyframes flowDash { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -14; } }
+@keyframes kernelPulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(245,158,11,0.30), 0 4px 10px rgba(245,158,11,0.25); }
+  50%      { box-shadow: 0 0 0 5px rgba(245,158,11,0.55), 0 4px 18px rgba(245,158,11,0.55); }
+}
+@keyframes wavePulse {
+  0%   { transform: scale(1);     filter: brightness(1)    drop-shadow(0 0 0 rgba(245,158,11,0)); }
+  35%  { transform: scale(1.10);  filter: brightness(1.18) drop-shadow(0 0 6px rgba(245,158,11,0.55)); }
+  100% { transform: scale(1);     filter: brightness(1)    drop-shadow(0 0 0 rgba(245,158,11,0)); }
+}
+body { background: #e8e6df; margin: 0; }
+html, body { overscroll-behavior: none; }
+body.app-mode {
+  background: var(--bg, #f2f2f7);
+  display: block;
+  padding: 0;
+}
+body.app-mode #root { width: 100vw; min-height: 100vh; min-height: 100dvh; }
+#root { transform-origin: top center; }
+.thumb-strip::-webkit-scrollbar { display: none; }

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
+<meta http-equiv="Expires" content="0" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="theme-color" content="#e8e6df" />
+<title>NeuroVis · CNN 可视化</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Kalam:wght@700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="src/styles/tokens.css" />
+<style>
+  body { background: #e8e6df; margin: 0; }
+  html, body { overscroll-behavior: none; }
+  body.app-mode {
+    background: var(--bg, #f2f2f7);
+    display: block;
+    padding: 0;
+  }
+  body.app-mode #root { width: 100vw; min-height: 100vh; min-height: 100dvh; }
+  #root { transform-origin: top center; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="jumper-root"></div>
+
+<script>
+(function () {
+  var CONTENT_W = 868, CONTENT_H = 414;
+  var params = new URLSearchParams(location.search);
+  var param = params.get('scale');
+  var appParam = params.get('app');
+  var fixed = parseFloat(param);
+  var useAuto = !(fixed > 0 && fixed <= 2);
+  var root = document.getElementById('root');
+  function shouldUseAppMode() {
+    if (appParam === '1') return true;
+    if (appParam === '0') return false;
+    return window.matchMedia('(max-width: 540px)').matches ||
+      window.matchMedia('(max-height: 540px) and (max-width: 980px)').matches;
+  }
+  function apply(s) {
+    root.style.transform = 'scale(' + s + ')';
+    document.body.style.minHeight = (s * CONTENT_H) + 'px';
+  }
+  function fillViewport() {
+    root.style.transform = 'none';
+    document.body.style.minHeight = '100vh';
+  }
+  function fit() {
+    if (shouldUseAppMode()) {
+      fillViewport();
+      return;
+    }
+    var s = Math.min(window.innerWidth / CONTENT_W, window.innerHeight / CONTENT_H);
+    apply(Math.min(s, 1));
+  }
+  if (useAuto) {
+    fit();
+    window.addEventListener('resize', fit);
+  } else if (shouldUseAppMode()) {
+    fillViewport();
+  } else {
+    apply(fixed);
+  }
+})();
+</script>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+
+<!-- Keep script order static: WKWebView does not reliably run dynamically appended text/babel scripts. -->
+<script src="src/cnn/engine.js"></script>
+<script src="src/cnn/inputs.js"></script>
+<script src="src/data.js"></script>
+<script type="text/babel" src="src/components/ios-frame.jsx"></script>
+<script type="text/babel" src="src/components/tweaks-panel.jsx"></script>
+<script type="text/babel" src="src/components/components.jsx"></script>
+<script type="text/babel" src="src/screens/detail-views.jsx"></script>
+<script type="text/babel" src="src/screens/screens-l1.jsx"></script>
+<script type="text/babel" src="src/screens/screens-rest.jsx"></script>
+<script type="text/babel" src="src/app.jsx"></script>
+</body>
+</html>

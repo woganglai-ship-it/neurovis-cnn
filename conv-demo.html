@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Convolution · 概念验证 (L1 / L2, 选中通道驱动)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+Pro:ital,wght@0,500;1,500;1,600&family=JetBrains+Mono:wght@600;700&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; padding: 0; min-height: 100%; background: #F4F1EA; overflow: hidden; }
+  body { font-family: "Source Serif Pro", -apple-system, sans-serif; color: #1B1F2A; -webkit-font-smoothing: antialiased; }
+  * { box-sizing: border-box; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo } = React;
+
+// ── tokens ──────────────────────────────────────────────────────
+const T = {
+  bg: '#F4F1EA', paper: '#FAF7F0', ink: '#1B1F2A', ink2: '#5B5F6B', ink3: '#9A9DA6',
+  rule: 'rgba(27,31,42,0.18)', pos: '#C04A3C', neg: '#3A6FA8',
+  hi: '#E8B92C', hiSoft: 'rgba(232,185,44,0.22)',
+  serifIt: '"Source Serif Pro", "Times New Roman", serif',
+  mono: '"JetBrains Mono", ui-monospace, Menlo, monospace',
+};
+
+// ── 维度 ────────────────────────────────────────────────────────
+const IH = 8, IW = 8, KS = 3, OH = 6, OW = 6, STEPS = OH * OW;
+const range = (n) => Array.from({ length: n }, (_, i) => i);
+
+// ── 数据生成 ────────────────────────────────────────────────────
+function makeInput(seed) {
+  const m = [];
+  for (let r = 0; r < IH; r++) { const row = [];
+    for (let c = 0; c < IW; c++) {
+      const x = (c - (IW-1)/2) * 0.6, y = (r - (IH-1)/2) * 0.6;
+      let v = 0.55*Math.sin(x*0.9+seed*0.43) + 0.50*Math.cos(y*0.85+seed*0.71)
+            + 0.35*Math.sin((x+y)*0.55+seed*1.27) + 0.25*Math.cos((x-y)*0.8-seed*0.6);
+      row.push(Math.max(-1, Math.min(1, v*0.52)));
+    } m.push(row);
+  } return m;
+}
+function makeKernel(seed) {
+  const m = [];
+  for (let r = 0; r < KS; r++) { const row = [];
+    for (let c = 0; c < KS; c++) {
+      const v = Math.sin(r*1.13+c*0.71+seed*0.97) + 0.6*Math.cos((r+c+1)*0.7*seed+1.2);
+      row.push(Math.round(v*50)/100);
+    } m.push(row);
+  } return m;
+}
+function conv2d(input, kernel) {
+  const out = [];
+  for (let r = 0; r < OH; r++) { const row = [];
+    for (let c = 0; c < OW; c++) { let s = 0;
+      for (let i = 0; i < KS; i++) for (let j = 0; j < KS; j++) s += input[r+i][c+j]*kernel[i][j];
+      row.push(s);
+    } out.push(row);
+  } return out;
+}
+function pctMaxAbs(ch, p = 0.75) {
+  const s = ch.flat().map(Math.abs).sort((a,b)=>a-b);
+  return Math.max(s[Math.floor(s.length*p)] || 0, 0.001);
+}
+function cellBg(v, maxAbs) {
+  if (Math.abs(v) < 1e-9 || maxAbs < 1e-9) return T.paper;
+  const norm = Math.min(1, Math.abs(v)/(maxAbs*0.55));
+  const t = Math.sqrt(norm);
+  const target = v > 0 ? [192,74,60] : [58,111,168];
+  const paper = [250,247,240], a = 0.08 + t*0.88;
+  const mix = paper.map((p,i)=>Math.round(p*(1-a)+target[i]*a));
+  return `rgb(${mix[0]},${mix[1]},${mix[2]})`;
+}
+
+// 整张网络数据 (依赖通道数 N)。
+//   L1: 1 输入 → N 个 kernel → N 个输出   (选 j 看 input ⊛ k1[j] = out1[j])
+//   L2: N 输入 → 每个输出 j 用 N 个 kernel → Σ + bias = out2[j]
+function buildNet(N) {
+  const input1 = makeInput(3);
+  const k1 = range(N).map(j => makeKernel(j*1.9 + 0.7));
+  const out1 = k1.map((k,j) => conv2d(input1,k).map(row=>row.map(v=>v+0.05+0.01*j)));
+
+  const inputs2 = range(N).map(i => makeInput(i*1.3 + 1));
+  const k2 = range(N).map(j => range(N).map(i => makeKernel(j*2.1 + i*0.6 + 0.3))); // k2[j][i]
+  const inter2 = range(N).map(j => range(N).map(i => conv2d(inputs2[i], k2[j][i])));
+  const out2 = range(N).map(j => {
+    const m = range(OH).map(()=>range(OW).map(()=>0.12));
+    inter2[j].forEach(it => { for (let r=0;r<OH;r++) for (let c=0;c<OW;c++) m[r][c]+=it[r][c]; });
+    return m;
+  });
+  return { input1, k1, out1, inputs2, k2, inter2, out2 };
+}
+
+// ── Heatmap ─────────────────────────────────────────────────────
+function Heatmap({ data, cell, maxAbs, mask, kernelPos, kernelSize, currentCell, border = true }) {
+  const H = data.length*cell, W = data[0].length*cell;
+  const mx = maxAbs == null ? pctMaxAbs(data, 0.75) : maxAbs;
+  return (
+    <div style={{ position:'relative', width:W, height:H, background:T.paper,
+      border: border ? `1px solid ${T.rule}` : 'none' }}>
+      {data.map((row,r)=>row.map((v,c)=>{
+        const dim = mask ? !mask(r,c) : false;
+        return <div key={`${r}-${c}`} style={{ position:'absolute', top:r*cell, left:c*cell,
+          width:cell, height:cell, background:cellBg(v,mx), visibility: dim?'hidden':'visible' }} />;
+      }))}
+      {kernelPos && <div style={{ position:'absolute', top:kernelPos.r*cell-2, left:kernelPos.c*cell-2,
+        width:kernelSize*cell+4, height:kernelSize*cell+4, border:`2px solid ${T.hi}`, background:T.hiSoft,
+        borderRadius:2, boxShadow:'0 0 0 1.5px rgba(232,185,44,0.45), 0 3px 8px rgba(232,185,44,0.35)',
+        transition:'top .42s cubic-bezier(.55,.05,.25,1), left .42s cubic-bezier(.55,.05,.25,1)',
+        pointerEvents:'none', zIndex:3 }} />}
+      {currentCell && <div style={{ position:'absolute', top:currentCell.r*cell-1.5, left:currentCell.c*cell-1.5,
+        width:cell+3, height:cell+3, border:`1.5px solid ${T.hi}`, borderRadius:1.5,
+        boxShadow:'0 0 0 1px rgba(232,185,44,0.35)',
+        transition:'top .42s cubic-bezier(.55,.05,.25,1), left .42s cubic-bezier(.55,.05,.25,1)',
+        pointerEvents:'none', zIndex:3 }} />}
+    </div>
+  );
+}
+
+// ── 控制条 ──────────────────────────────────────────────────────
+function ControlBar({ step, playing, setPlaying, speed, setSpeed }) {
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:14, fontFamily:T.mono }}>
+      <div onClick={()=>setPlaying(p=>!p)} style={{ width:30, height:30, borderRadius:'50%',
+        background:T.ink, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}>
+        {playing ? <svg width="9" height="11" viewBox="0 0 9 11"><rect x="0" y="0" width="3" height="11" fill="#fff"/><rect x="6" y="0" width="3" height="11" fill="#fff"/></svg>
+                 : <svg width="9" height="11" viewBox="0 0 9 11"><path d="M0 0 L9 5.5 L0 11 z" fill="#fff"/></svg>}
+      </div>
+      <div style={{ fontSize:11, color:T.ink2, fontWeight:600, letterSpacing:0.6 }}>
+        STEP {String(step+1).padStart(2,'0')}<span style={{ color:T.ink3 }}> / {STEPS}</span>
+      </div>
+      <div style={{ display:'flex', gap:2, background:'rgba(27,31,42,0.06)', borderRadius:999, padding:2 }}>
+        {[0.5,1,2].map(s=>(
+          <div key={s} onClick={()=>setSpeed(s)} style={{ padding:'3px 8px', borderRadius:999,
+            fontSize:10, fontWeight:700, color: speed===s?T.ink:T.ink3,
+            background: speed===s?'#fff':'transparent', cursor:'pointer' }}>{s}×</div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── 通道选择器 (点哪个看哪个) + 通道数 stepper ───────────────────
+function ChannelPicker({ N, setN, sel, setSel, label }) {
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:14, fontFamily:T.mono, flexWrap:'wrap' }}>
+      <span style={{ fontSize:10, color:T.ink3, letterSpacing:0.6, fontWeight:700 }}>{label}</span>
+      <div style={{ display:'flex', gap:4 }}>
+        {range(N).map(j=>(
+          <div key={j} onClick={()=>setSel(j)} style={{
+            width:24, height:24, borderRadius:6, cursor:'pointer',
+            display:'flex', alignItems:'center', justifyContent:'center',
+            fontSize:11, fontWeight:700,
+            color: sel===j ? '#fff' : T.ink2,
+            background: sel===j ? T.ink : 'rgba(27,31,42,0.06)',
+          }}>{j}</div>
+        ))}
+      </div>
+      <div style={{ display:'flex', alignItems:'center', gap:6, marginLeft:8 }}>
+        <span style={{ fontSize:10, color:T.ink3 }}>channels</span>
+        <div onClick={()=>setN(Math.max(2, N-1))} style={stepBtn}>–</div>
+        <span style={{ fontSize:12, fontWeight:700, minWidth:16, textAlign:'center' }}>{N}</span>
+        <div onClick={()=>setN(Math.min(10, N+1))} style={stepBtn}>+</div>
+      </div>
+    </div>
+  );
+}
+const stepBtn = { width:20, height:20, borderRadius:5, background:'rgba(27,31,42,0.06)',
+  display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', fontSize:13, fontWeight:700, color:T.ink2 };
+
+// ── Stage ───────────────────────────────────────────────────────
+const STAGE_W = 1100, STAGE_H = 720;
+function Stage({ children }) {
+  const [scale, setScale] = useState(1);
+  useEffect(()=>{
+    const fit = ()=>setScale(Math.min((window.innerWidth-24)/STAGE_W,(window.innerHeight-24)/STAGE_H,1));
+    fit(); window.addEventListener('resize',fit); return ()=>window.removeEventListener('resize',fit);
+  },[]);
+  return (
+    <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:T.bg }}>
+      <div style={{ width:STAGE_W, height:STAGE_H, transform:`scale(${scale})`, transformOrigin:'center', position:'relative' }}>{children}</div>
+    </div>
+  );
+}
+
+function ColTitle({ x, name, sub }) {
+  return <div style={{ position:'absolute', top:115, left:x, fontFamily:T.serifIt, fontStyle:'italic', fontSize:15, color:T.ink }}>
+    {name}<span style={{ fontFamily:T.mono, fontStyle:'normal', fontSize:10, color:T.ink3, marginLeft:6 }}>{sub}</span>
+  </div>;
+}
+
+// ── 第一层视图: 单路径 (input ⊛ k[sel] = out[sel]) ──────────────
+function Layer1View({ net, N, sel, step }) {
+  const kr = Math.floor(step/OW), kc = step%OW;
+  const mask = (r,c)=>(r*OW+c)<=step;
+  const IN_CELL = 17, K_CELL = 22, OUT_CELL = 17;
+  const inSize = IH*IN_CELL, kSize = KS*K_CELL, outSize = OH*OUT_CELL;
+  const cy = 420;
+  const xIn = 110, xK = 430, xBias = 650, xOut = 790;
+  const srcX = xIn+inSize, kInX = xK, kOutX = xK+kSize, outX = xOut;
+  return (
+    <>
+      <ColTitle x={xIn} name="input" sub={`1 × ${IH}×${IW}`} />
+      <ColTitle x={xK} name={`kernel ${sel}`} sub={`${KS}×${KS}`} />
+      <ColTitle x={xOut} name={`output ${sel}`} sub={`${OH}×${OW}`} />
+      <div style={{ position:'absolute', left:srcX, top:150, width:xK-srcX, textAlign:'center',
+        fontFamily:T.serifIt, fontStyle:'italic', fontSize:11.5, color:T.ink2 }}>
+        kernel&nbsp;{sel}&nbsp;scans the input
+      </div>
+      <div style={{ position:'absolute', left:kOutX, top:150, width:xOut-kOutX, textAlign:'center',
+        fontFamily:T.serifIt, fontStyle:'italic', fontSize:11.5, color:T.ink2 }}>
+        add bias
+      </div>
+      <svg width={STAGE_W} height={STAGE_H} style={{ position:'absolute', inset:0, pointerEvents:'none', zIndex:1 }}>
+        <path d={`M ${srcX} ${cy} L ${kInX} ${cy}`} fill="none" stroke={T.ink2} strokeOpacity={0.5} strokeWidth={0.9} strokeDasharray="3 3" />
+        <path d={`M ${kOutX} ${cy} L ${xBias-14} ${cy}`} fill="none" stroke={T.ink2} strokeOpacity={0.5} strokeWidth={0.9} strokeDasharray="3 3" />
+        <path d={`M ${xBias+14} ${cy} L ${outX} ${cy}`} fill="none" stroke={T.ink2} strokeOpacity={0.5} strokeWidth={0.9} strokeDasharray="3 3" />
+      </svg>
+      <div style={{ position:'absolute', left:xIn, top:cy-inSize/2, zIndex:2 }}>
+        <Heatmap data={net.input1} cell={IN_CELL} kernelPos={{r:kr,c:kc}} kernelSize={KS} />
+      </div>
+      <div style={{ position:'absolute', left:xK, top:cy-kSize/2, zIndex:2 }}>
+        <Heatmap data={net.k1[sel]} cell={K_CELL} />
+      </div>
+      {/* bias node */}
+      <div style={{ position:'absolute', left:xBias-18, top:cy-18, width:36, height:36, borderRadius:18,
+        background:T.paper, border:`1.4px solid ${T.ink}`, display:'flex', alignItems:'center', justifyContent:'center',
+        fontFamily:T.serifIt, fontStyle:'italic', fontSize:20, fontWeight:600, color:T.ink, zIndex:2 }}>
+        +
+        <div style={{ position:'absolute', top:40, left:'50%', transform:'translateX(-50%)',
+          fontFamily:T.mono, fontSize:9, color:T.ink3, whiteSpace:'nowrap' }}>BIAS</div>
+      </div>
+      <div style={{ position:'absolute', left:xOut, top:cy-outSize/2, zIndex:2 }}>
+        <Heatmap data={net.out1[sel]} cell={OUT_CELL} mask={mask} currentCell={{r:kr,c:kc}} />
+      </div>
+    </>
+  );
+}
+
+// ── 第二层视图: N 输入扇形汇聚 → bias → out[sel] ─────────────────
+function Layer2View({ net, N, sel, step }) {
+  const kr = Math.floor(step/OW), kc = step%OW;
+  const mask = (r,c)=>(r*OW+c)<=step;
+  const IN_CELL = 5, MID_CELL = 6, OUT_CELL = 13;
+  const inSize = IH*IN_CELL, midSize = OH*MID_CELL, outSize = OH*OUT_CELL;
+  const rowH = Math.min(54, 470/N);
+  const topY = 150 + (470 - rowH*N)/2;
+  const xIn = 120, xMid = 430, xBias = 720, xOut = 850;
+  const rowCY = (i)=> topY + i*rowH + rowH/2;
+  const centerY = (rowCY(0)+rowCY(N-1))/2;
+
+  const wires = [];
+  for (let i=0;i<N;i++){
+    // input → intermediate (1:1)
+    wires.push({ d:`M ${xIn+inSize} ${rowCY(i)} L ${xMid} ${rowCY(i)}`, faint:true });
+    // intermediate → bias (扇形)
+    const ax = xMid+midSize, ay = rowCY(i), bx = xBias-14, by = centerY, dx=(bx-ax)*0.55;
+    wires.push({ d:`M ${ax} ${ay} C ${ax+dx} ${ay}, ${bx-dx*0.4} ${by}, ${bx} ${by}`, faint:false });
+  }
+  wires.push({ d:`M ${xBias+14} ${centerY} L ${xOut} ${centerY}`, faint:false });
+
+  return (
+    <>
+      <ColTitle x={xIn} name="inputs" sub={`${N} × ${IH}×${IW}`} />
+      <ColTitle x={xMid} name="intermediate" sub={`${N} × ${OH}×${OW}`} />
+      <ColTitle x={xOut} name={`output ${sel}`} sub={`1 × ${OH}×${OW}`} />
+      <div style={{ position:'absolute', left:xMid+midSize, top:130, width:xOut-(xMid+midSize), textAlign:'center',
+        fontFamily:T.serifIt, fontStyle:'italic', fontSize:11.5, color:T.ink2 }}>
+        sum all {N} + bias
+      </div>
+      <svg width={STAGE_W} height={STAGE_H} style={{ position:'absolute', inset:0, pointerEvents:'none', zIndex:1 }}>
+        {wires.map((w,i)=>(<path key={i} d={w.d} fill="none" stroke={T.ink2}
+          strokeOpacity={w.faint?0.3:0.5} strokeWidth={0.8} strokeDasharray="3 3" />))}
+      </svg>
+      {net.inputs2.map((ch,i)=>(
+        <div key={`in${i}`} style={{ position:'absolute', left:xIn, top:rowCY(i)-inSize/2, zIndex:2 }}>
+          <Heatmap data={ch} cell={IN_CELL} kernelPos={{r:kr,c:kc}} kernelSize={KS} />
+        </div>
+      ))}
+      {net.inter2[sel].map((ch,i)=>(
+        <div key={`mid${i}`} style={{ position:'absolute', left:xMid, top:rowCY(i)-midSize/2, zIndex:2 }}>
+          <Heatmap data={ch} cell={MID_CELL} mask={mask} currentCell={{r:kr,c:kc}} />
+        </div>
+      ))}
+      {/* bias node */}
+      <div style={{ position:'absolute', left:xBias-18, top:centerY-18, width:36, height:36, borderRadius:18,
+        background:T.paper, border:`1.4px solid ${T.ink}`, display:'flex', alignItems:'center', justifyContent:'center',
+        fontFamily:T.serifIt, fontStyle:'italic', fontSize:20, fontWeight:600, color:T.ink, zIndex:2 }}>
+        +
+        <div style={{ position:'absolute', top:40, left:'50%', transform:'translateX(-50%)',
+          fontFamily:T.mono, fontSize:9, color:T.ink3, whiteSpace:'nowrap' }}>BIAS</div>
+      </div>
+      <div style={{ position:'absolute', left:xOut, top:centerY-outSize/2, zIndex:2 }}>
+        <Heatmap data={net.out2[sel]} cell={OUT_CELL} mask={mask} currentCell={{r:kr,c:kc}} />
+      </div>
+    </>
+  );
+}
+
+// ── App ─────────────────────────────────────────────────────────
+const Q = new URLSearchParams(location.search);
+function App() {
+  const [layer, setLayer] = useState(Q.get('layer')==='2' ? 2 : 1);
+  const [N, setN] = useState(8);
+  const [sel, setSel] = useState(0);
+  const [step, setStep] = useState(0);
+  const [playing, setPlaying] = useState(true);
+  const [speed, setSpeed] = useState(1);
+
+  const net = useMemo(()=>buildNet(N), [N]);
+  useEffect(()=>{ if (sel >= N) setSel(N-1); }, [N, sel]);
+
+  useEffect(()=>{
+    if (!playing) return;
+    const dur = (step===STEPS-1 ? 1400 : 520)/speed;
+    const t = setTimeout(()=>setStep(s=>(s+1)%STEPS), dur);
+    return ()=>clearTimeout(t);
+  }, [step, playing, speed]);
+
+  const safeSel = Math.min(sel, N-1);
+
+  return (
+    <Stage>
+      {/* 顶部: 层切换 + 标题 + 控制条 */}
+      <div style={{ position:'absolute', top:28, left:40, right:40, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+          <div style={{ display:'flex', gap:2, background:'rgba(27,31,42,0.06)', borderRadius:999, padding:3, fontFamily:T.mono }}>
+            {[1,2].map(l=>(
+              <div key={l} onClick={()=>setLayer(l)} style={{ padding:'4px 12px', borderRadius:999, fontSize:11, fontWeight:700,
+                cursor:'pointer', color: layer===l?T.ink:T.ink3, background: layer===l?'#fff':'transparent',
+                boxShadow: layer===l?'0 1px 3px rgba(0,0,0,.08)':'none' }}>LAYER {l}</div>
+            ))}
+          </div>
+          <h1 style={{ margin:0, fontSize:18, fontWeight:500, color:T.ink, fontFamily:T.serifIt, fontStyle:'italic' }}>
+            {layer===1 ? `1 input · kernel ${safeSel} · output ${safeSel}` : `${N} inputs · sum + bias · output ${safeSel}`}
+          </h1>
+        </div>
+        <ControlBar step={step} playing={playing} setPlaying={setPlaying} speed={speed} setSpeed={setSpeed} />
+      </div>
+
+      {/* 通道选择器 */}
+      <div style={{ position:'absolute', top:68, left:40, right:40 }}>
+        <ChannelPicker N={N} setN={setN} sel={safeSel} setSel={setSel}
+          label={layer===1 ? 'CLICK OUTPUT CHANNEL →' : 'CLICK OUTPUT CHANNEL →'} />
+      </div>
+
+      {layer===1
+        ? <Layer1View net={net} N={N} sel={safeSel} step={step} />
+        : <Layer2View net={net} N={N} sel={safeSel} step={step} />}
+
+      {/* 图例 */}
+      <div style={{ position:'absolute', bottom:20, left:36, right:36, display:'flex', justifyContent:'space-between',
+        fontFamily:T.mono, fontSize:9.5, color:T.ink3, letterSpacing:0.5 }}>
+        <span style={{ display:'inline-flex', gap:18 }}>
+          <span><span style={{ color:T.pos, fontWeight:700 }}>● </span>POSITIVE</span>
+          <span><span style={{ color:T.neg, fontWeight:700 }}>● </span>NEGATIVE</span>
+          <span><span style={{ color:T.hi, fontWeight:700 }}>▢ </span>KERNEL / CURRENT</span>
+        </span>
+        <span style={{ fontStyle:'italic', fontFamily:T.serifIt, fontSize:11 }}>after CNN Explainer</span>
+      </div>
+    </Stage>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
