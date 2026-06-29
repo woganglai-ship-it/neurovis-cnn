@@ -242,6 +242,26 @@
       );
     }
 
+    // 第二层卷积 (输入为多通道) → 堆叠视图; 第一层 (灰度单通道) → 弹性视图
+    if (inputChannels.length > 1) {
+      return (
+        <ConvStackView
+          inputChannels={inputChannels}
+          kernels={kernels}
+          intermediates={intermediates}
+          outputMap={outputMap}
+          bias={bias}
+          oc={oc}
+          prevLayer={prev}
+          layer={layer}
+          numChannels={numChannels}
+          lang={lang}
+          onClose={onClose}
+          onEnterFormula={(ic) => { haptic(); setFormula({ ic }); }}
+        />
+      );
+    }
+
     return (
       <ConvElasticView
         inputChannels={inputChannels}
@@ -259,180 +279,359 @@
     );
   }
 
-  // ─────────── Level 1: Elastic Explanation View ───────────
+  // ─────────── Level 1: Conv 弹性视图 (Claude Design UI · 接真实 MNIST 数据) ───────────
+  // 用到的 useState/useEffect/useRef/useMemo / Modal / CloseBtn 都来自本文件已有作用域。
   function ConvElasticView({ inputChannels, inputIsGray, kernels, intermediates,
                              outputMap, bias, oc, colormap, lang, onClose, onEnterFormula }) {
     const zh = lang === 'zh';
-    const N = inputChannels.length;
-    const outN = outputMap ? outputMap.length : 0;
-    const inN = inputChannels[0] ? inputChannels[0].length : 0;
-    const kSize = (kernels[0] && kernels[0].length) || 3;
+    const input  = inputChannels[0] || [];
+    const kernel = kernels[0] || [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    const omap   = outputMap || intermediates[0] || [];
+    const inN    = input.length || 28;
+    const outN   = omap.length || 26;
 
-    const [pos, setPos] = useState({ x: 0, y: 0 });
+    const inRef = useRef(null), midRef = useRef(null), inBoxRef = useRef(null), midBoxRef = useRef(null);
     const [playing, setPlaying] = useState(true);
-    const [speed, setSpeed] = useState(1);
+    const [speed, setSpeed]     = useState(1);
+    const [runId, setRunId]     = useState(0);
+    const playRef = useRef(true), speedRef = useRef(1);
+    useEffect(() => { playRef.current = playing; }, [playing]);
+    useEffect(() => { speedRef.current = speed; }, [speed]);
+
+    const SIZE = 168, inLeft = 150, inTop = 66, midLeft = 470, midTop = 66;
+    const cellIn = SIZE / inN, cellMid = SIZE / outN;
+
+    // 输出归一为橙色强度 (|conv| → gamma 0.7)
+    const onorm = useMemo(() => {
+      let mx = 1e-6;
+      for (let r = 0; r < outN; r++) for (let c = 0; c < outN; c++) { const v = Math.abs(omap[r][c]); if (v > mx) mx = v; }
+      const g = [];
+      for (let r = 0; r < outN; r++) { const row = []; for (let c = 0; c < outN; c++) row.push(Math.pow(Math.abs(omap[r][c]) / mx, 0.7)); g.push(row); }
+      return g;
+    }, [omap, outN]);
+
+    // 实时数据 ref(loop 里读最新, 避免对象引用变化触发重启)
+    const onormRef = useRef(onorm); onormRef.current = onorm;
+    // 稳定数据签名: 仅当数字/通道/尺寸真正变化时才变 (字符串值, 同数据时 === 相等 → 不重启动画)
+    const sig = useMemo(() => {
+      let acc = 0;
+      for (let r = 0; r < outN; r++) for (let c = 0; c < outN; c++) acc += Math.abs(omap[r][c]) * (r * 31 + c + 1);
+      return outN + '|' + oc + '|' + Math.round(acc * 1000);
+    }, [omap, outN, oc]);
+
+    // 输入白点 = 自身最大值 (兼容 0–1 或 0–255)
+    const inMx = useMemo(() => {
+      let mx = 1e-6; for (let r = 0; r < inN; r++) for (let c = 0; c < inN; c++) { if (input[r][c] > mx) mx = input[r][c]; }
+      return mx;
+    }, [input, inN]);
+
+    // ① 画输入: 28×28 离散像素 + 网格线
     useEffect(() => {
-      if (!playing || outN === 0) return;
-      let i = pos.y * outN + pos.x;
-      const id = setInterval(() => {
-        i = (i + 1) % (outN * outN);
-        setPos({ x: i % outN, y: Math.floor(i / outN) });
-      }, Math.round(520 / speed));
-      return () => clearInterval(id);
-    }, [playing, speed, outN]);
-    const px = Math.min(pos.x, Math.max(0, outN - 1));
-    const py = Math.min(pos.y, Math.max(0, outN - 1));
+      const cv = inRef.current; if (!cv) return;
+      const ctx = cv.getContext('2d'), cw = SIZE / inN;
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, SIZE, SIZE);
+      for (let r = 0; r < inN; r++) for (let c = 0; c < inN; c++) {
+        const p = Math.round(Math.max(0, Math.min(1, input[r][c] / inMx)) * 255);
+        ctx.fillStyle = 'rgb(' + p + ',' + p + ',' + p + ')';
+        ctx.fillRect(c * cw, r * cw, cw, cw);
+      }
+      ctx.strokeStyle = 'rgba(150,150,150,0.22)'; ctx.lineWidth = 1; ctx.beginPath();
+      for (let i = 0; i <= inN; i++) { const x = Math.round(i * cw) + 0.5; ctx.moveTo(x, 0); ctx.lineTo(x, SIZE); ctx.moveTo(0, x); ctx.lineTo(SIZE, x); }
+      ctx.stroke();
+    }, [input, inN, inMx]);
 
-    // 色阶上限 (各自 75 分位)
-    const inMax = inputChannels.map(m => inputIsGray ? 1 : pctMaxAbs(m, 0.8));
-    const interMax = intermediates.map(m => pctMaxAbs(m, 0.7));
-    const outMax = pctMaxAbs(outputMap, 0.7);
+    // ② 输出逐格扫描动画 + 滑窗同步
+    useEffect(() => {
+      const mc = midRef.current; if (!mc) return;
+      const mctx = mc.getContext('2d');
+      const inBox = inBoxRef.current, midBox = midBoxRef.current;
+      let idx = 0, acc = 0, hold = 0, last = 0, raf, dwell = 26;
+      function pos(r, c) {
+        if (inBox) { inBox.style.left = (inLeft + c * cellIn) + 'px'; inBox.style.top = (inTop + r * cellIn) + 'px'; inBox.style.width = (3 * cellIn) + 'px'; inBox.style.height = (3 * cellIn) + 'px'; }
+        if (midBox) { midBox.style.left = (midLeft + c * cellMid) + 'px'; midBox.style.top = (midTop + r * cellMid) + 'px'; midBox.style.width = cellMid + 'px'; midBox.style.height = cellMid + 'px'; }
+      }
+      function reset() { idx = 0; acc = 0; hold = 0; mctx.clearRect(0, 0, outN, outN); pos(0, 0); }
+      function adv(step) {
+        if (idx >= outN * outN) { hold += step; if (hold > 900) reset(); return; }
+        const k = idx, r = (k / outN) | 0, c = k % outN, row = onormRef.current[r] || [], v = Math.min(1, (row[c] || 0) * 1.18);
+        mctx.fillStyle = 'rgba(232,117,76,' + v.toFixed(3) + ')'; mctx.fillRect(c, r, 1, 1); pos(r, c); idx++;
+      }
+      function loop(t) {
+        if (!last) last = t; const dt = Math.min(80, t - last); last = t;
+        if (playRef.current) { const step = dwell / speedRef.current; acc += dt; let g = 0; while (acc >= step && g < 80) { acc -= step; adv(step); g++; } }
+        raf = requestAnimationFrame(loop);
+      }
+      reset(); raf = requestAnimationFrame(loop);
+      return () => cancelAnimationFrame(raf);
+    }, [sig, runId]);
 
-    // tile 尺寸:行数越多越小,允许列纵向滚动
-    const TILE = Math.max(24, Math.min(64, Math.floor((250 - (N - 1) * 6) / N)));
-    const KMINI = Math.round(TILE * 0.5);
+    // kernel 色块: 真实核 → 红蓝
+    const km = Math.max(0.001, Math.max.apply(null, kernel.flat().map(Math.abs)));
+    function rdbu(t) {
+      t = Math.max(0, Math.min(1, t)); let r, g, b;
+      if (t < 0.5) { const u = t / 0.5; r = 178 + (255 - 178) * u; g = 24 + (255 - 24) * u; b = 43 + (255 - 43) * u; }
+      else { const u = (t - 0.5) / 0.5; r = 255 - (255 - 33) * u; g = 255 - (255 - 102) * u; b = 255 - (255 - 172) * u; }
+      return 'rgb(' + (r | 0) + ',' + (g | 0) + ',' + (b | 0) + ')';
+    }
 
-    const L = zh ? {
-      tag: '卷积层 · 第一级',
-      sub: `${N} 输入通道 · ${N} 卷积核 · 1 输出`,
-      input: '输入', inter: '中间结果', out: '输出',
-      sumNote: '把所有中间结果相加,再加偏置', bias: '偏置',
-      tapHint: '点中间结果或输出 → 看单个像素公式',
-    } : {
-      tag: 'CONVOLUTION · LEVEL 1',
-      sub: `${N} input ${N === 1 ? 'channel' : 'channels'} · ${N} ${N === 1 ? 'kernel' : 'kernels'} · 1 output`,
-      input: 'input', inter: 'intermediate', out: 'output',
-      sumNote: 'sum all intermediate results, then add bias', bias: 'bias',
-      tapHint: 'tap an intermediate or the output → per-pixel formula',
-    };
+    const L = zh
+      ? { input: '输入', inter: '中间结果', kernel: '卷积核', cap1: '卷积核在输入上滑动', cap1b: '得到中间结果', cap2: '每个输出像素 = 3×3 区块', cap2b: '与卷积核加权求和', foot: `conv · 通道 ${oc} · 3×3 · 步长 1` }
+      : { input: 'input', inter: 'intermediate', kernel: 'Kernel', cap1: 'Slide the kernel over the input', cap1b: 'to get the intermediate result', cap2: 'Each output pixel = sum of the 3×3', cap2b: 'patch × the kernel weights', foot: `conv · ch ${oc} · 3×3 · stride 1` };
 
-    const flowStyle = playing
-      ? { strokeDasharray: '4 3', animation: 'flowDash 0.5s linear infinite' }
-      : { strokeDasharray: 'none' };
+    const btn = { height: 38, border: '1px solid #dcdcdc', background: '#fafafa', borderRadius: 8, cursor: 'pointer', color: '#333', display: 'flex', alignItems: 'center', justifyContent: 'center' };
+    const cap = { position: 'absolute', fontFamily: 'Georgia,serif', fontStyle: 'italic', lineHeight: 1.5 };
 
     return (
-      <Modal onClose={onClose} bg="#F4F1EA" maxW="94vw">
-        {/* ── 顶栏: 单行自适应, 标签+副标题在左, 控件在右 ── */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
-          padding: '12px 16px 10px', borderBottom: '0.5px solid rgba(0,0,0,0.08)',
-        }}>
-          <span style={{
-            padding: '2px 8px', borderRadius: 4, background: 'rgba(232,185,44,0.15)',
-            fontSize: 9, fontWeight: 700, color: '#8a6b14', letterSpacing: '0.12em',
-            textTransform: 'uppercase', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap',
-          }}>{L.tag}</span>
-          <span style={{
-            fontSize: 12, color: 'var(--text-2)', fontFamily: 'Georgia, serif',
-            fontStyle: 'italic', whiteSpace: 'nowrap',
-          }}>{L.sub}</span>
-          <span style={{ flex: 1, minWidth: 8 }} />
-          <PlayBtn playing={playing} onToggle={() => setPlaying(p => !p)} />
-          <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
-            {zh ? '步' : 'step'} <b style={{ color: 'var(--text)' }}>{String(py * outN + px + 1).padStart(2, '0')}</b>/{outN * outN}
-          </span>
-          <div style={{ display: 'flex', border: '0.5px solid var(--separator-strong)', borderRadius: 11, padding: 2, background: '#fff' }}>
-            {[0.5, 1, 2].map(s => (
-              <button key={s} onClick={(e) => { e.stopPropagation(); setSpeed(s); }} style={{
-                padding: '1px 7px', border: 'none', borderRadius: 9,
-                background: speed === s ? '#1c1c1e' : 'transparent',
-                color: speed === s ? '#fff' : 'var(--text-3)',
-                fontSize: 9, fontFamily: 'var(--font-mono)', fontWeight: 600, cursor: 'pointer',
-              }}>{s}×</button>
-            ))}
-          </div>
-          <CloseBtn onClose={onClose} />
-        </div>
-
-        {/* ── 主体: [通道列 (可滚)] [⊕bias] [输出] ── */}
-        <div style={{ display: 'flex', alignItems: 'stretch', gap: 0, padding: '6px 16px 12px' }}>
-          {/* 通道列 — 列标题固定, 内容纵向滚动 */}
-          <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-            <div style={{
-              display: 'flex', gap: 8, paddingLeft: KMINI + 8, paddingBottom: 4,
-              fontFamily: 'Georgia, serif', fontStyle: 'italic', fontSize: 11.5, color: 'var(--text-2)',
-              position: 'sticky', top: 0, background: '#F4F1EA', zIndex: 3,
-            }}>
-              <span style={{ width: TILE, textAlign: 'center' }}>{L.input}</span>
-              <span style={{ width: 22 }} />
-              <span style={{ width: TILE, textAlign: 'center' }}>{L.inter}</span>
-            </div>
-            <div style={{ maxHeight: 264, overflowY: 'auto', overflowX: 'hidden' }}>
-              {inputChannels.map((inMap, ic) => {
-                const inter = intermediates[ic];
-                const mN = inter ? inter.length : 0;
-                return (
-                  <div key={ic} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                    {/* kernel mini */}
-                    <KernelMini kern={kernels[ic]} size={KMINI} />
-                    {/* input tile + 滑窗 */}
-                    <MatrixView data={inMap} maxAbs={inMax[ic]} size={TILE} colormap={colormap}
-                      grayscale={inputIsGray}
-                      win={{ x: px, y: py, w: kSize, h: kSize }} />
-                    {/* 连线 (动画时流动虚线) */}
-                    <svg width="22" height={TILE} style={{ flexShrink: 0 }}>
-                      <line x1="0" y1={TILE / 2} x2="22" y2={TILE / 2}
-                        stroke="#94918a" strokeWidth="0.8" {...flowStyle} />
-                    </svg>
-                    {/* intermediate tile (可点 → 公式) */}
-                    <div onClick={(e) => { e.stopPropagation(); onEnterFormula(ic); }}
-                      style={{ position: 'relative', cursor: 'pointer' }}
-                      title={zh ? '点开公式' : 'open formula'}>
-                      {inter
-                        ? <MatrixView data={inter} maxAbs={interMax[ic]} size={TILE} colormap={colormap}
-                            win={mN ? { x: Math.min(px, mN - 1), y: Math.min(py, mN - 1), w: 1, h: 1 } : null} />
-                        : <div style={{ width: TILE, height: TILE, background: '#eee', borderRadius: 3 }} />}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* 汇聚: 扇形虚线 → ⊕ */}
-          <div style={{ position: 'relative', width: 70, alignSelf: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <svg width="70" height="120" viewBox="0 0 70 120" style={{ position: 'absolute' }}>
-              {[12, 36, 60, 84, 108].map((y, i) => (
-                <path key={i} d={`M 0 ${y} C 30 ${y}, 40 60, 52 60`}
-                  stroke="rgba(91,95,107,0.28)" strokeWidth="0.7" fill="none" {...flowStyle} />
-              ))}
+      <Modal onClose={onClose} bg="#fff" maxW="96vw">
+        <CloseBtn onClose={onClose} />
+        <div style={{ width: 760, height: 392, fontFamily: "'Helvetica Neue',Helvetica,Arial,sans-serif", color: '#2b2b2b', position: 'relative', padding: '6px 20px 10px' }}>
+          <div style={{ position: 'relative', width: 720, height: 372, margin: '0 auto' }}>
+            <svg width="720" height="372" viewBox="0 0 720 372" style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}>
+              <line x1="318" y1="146" x2="470" y2="146" stroke="#c4c4c4" strokeWidth="1.5" strokeDasharray="6 5" />
+              <polygon points="470,146 462,142 462,150" fill="#c4c4c4" />
+              <path d="M 96 124 C 110 142, 128 142, 146 108" fill="none" stroke="#b6b6b6" strokeWidth="1.4" strokeDasharray="4 4" />
+              <polygon points="146,108 139,116 148,117" fill="#b6b6b6" />
             </svg>
-            {/* ⊕ + bias */}
-            <div style={{ position: 'relative', zIndex: 2, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-              <div style={{
-                width: 30, height: 30, borderRadius: 15, background: '#FAF7F0',
-                border: '1px solid var(--text)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontFamily: 'Georgia, serif', fontStyle: 'italic', fontSize: 16, color: 'var(--text)',
-              }}>+</div>
-              <div style={{
-                width: 9, height: 9, borderRadius: 5, background: window.weightColor(bias),
-                boxShadow: 'inset 0 0 0 0.5px rgba(0,0,0,0.25)',
-              }} title="bias" />
-              <span style={{ fontSize: 8, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>
-                {L.bias} {fmt(bias)}
-              </span>
-            </div>
-          </div>
 
-          {/* 输出大图 (可点 → 公式, 默认走第 0 输入通道) */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, paddingLeft: 8 }}>
-            <span style={{ fontFamily: 'Georgia, serif', fontStyle: 'italic', fontSize: 11.5, color: 'var(--text-2)' }}>
-              {L.out} <span style={{ fontSize: 8, opacity: 0.5, fontFamily: 'var(--font-mono)', fontStyle: 'normal' }}>{outN}×{outN}</span>
-            </span>
-            <div onClick={(e) => { e.stopPropagation(); onEnterFormula(0); }} style={{ cursor: 'pointer' }}>
-              <MatrixView data={outputMap} maxAbs={outMax} size={132} colormap={colormap}
-                win={outN ? { x: px, y: py, w: 1, h: 1 } : null} />
+            <div style={{ position: 'absolute', left: 150, top: 22, fontSize: 19, fontWeight: 700 }}>{L.input}</div>
+            <div style={{ position: 'absolute', left: 150, top: 44, fontSize: 12.5, color: '#9a9a9a' }}>({inN}, {inN}, 1)</div>
+            <div style={{ position: 'absolute', left: 470, top: 22, fontSize: 19, fontWeight: 700 }}>{L.inter}</div>
+            <div style={{ position: 'absolute', left: 470, top: 44, fontSize: 12.5, color: '#9a9a9a' }}>({outN}, {outN}, 1)</div>
+
+            <div style={{ position: 'absolute', left: 18, top: 84, fontSize: 13.5, fontStyle: 'italic', fontFamily: 'Georgia,serif', color: '#444' }}>{L.kernel}</div>
+            <div style={{ position: 'absolute', left: 74, top: 82, width: 20, height: 20, display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 1, border: '1px solid #cfcfcf', background: '#cfcfcf' }}>
+              {kernel.flat().map((v, i) => <div key={i} style={{ background: rdbu(0.5 + 0.5 * v / km) }} />)}
             </div>
-            <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-2)' }}>
-              ({px},{py}) = <b>{fmt(outputMap ? outputMap[py][px] : 0)}</b>
-            </span>
+
+            <div style={{ position: 'absolute', left: 150, top: 66, width: 168, height: 168, border: '1px solid #d8d8d8' }}>
+              <canvas ref={inRef} width="168" height="168" style={{ width: 168, height: 168, display: 'block' }} />
+            </div>
+            <div style={{ position: 'absolute', left: 470, top: 66, width: 168, height: 168, border: '1px solid #d8d8d8', background: '#fff', cursor: onEnterFormula ? 'pointer' : 'default' }}
+                 onClick={() => onEnterFormula && onEnterFormula(0)}>
+              <canvas ref={midRef} width={outN} height={outN} style={{ width: 168, height: 168, display: 'block', imageRendering: 'pixelated' }} />
+            </div>
+
+            <div ref={inBoxRef} style={{ position: 'absolute', left: 150, top: 66, width: 21, height: 21, border: '1.6px solid #e8754c', background: 'rgba(232,117,76,0.14)', pointerEvents: 'none' }} />
+            <div ref={midBoxRef} style={{ position: 'absolute', left: 470, top: 66, width: 8, height: 8, border: '1.4px solid #e8754c', pointerEvents: 'none' }} />
+
+            <div style={{ ...cap, left: 150, top: 248, width: 260, fontSize: 14, color: '#666' }}>{L.cap1}<br />{L.cap1b}</div>
+            <div style={{ ...cap, left: 470, top: 248, width: 230, fontSize: 13, color: '#9a9a9a' }}>{L.cap2}<br />{L.cap2b}</div>
+
+            <div style={{ position: 'absolute', left: 150, top: 322, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <button style={{ ...btn, width: 38, fontSize: 16, color: '#555' }} onClick={() => { setRunId(x => x + 1); setPlaying(true); }}>↺</button>
+              <button style={{ ...btn, width: 54, fontSize: 14 }} onClick={() => setPlaying(p => !p)}>{playing ? '❚❚' : '▶'}</button>
+              <button style={{ ...btn, padding: '0 14px', fontSize: 13, fontWeight: 600 }} onClick={() => setSpeed(s => ({ 0.5: 1, 1: 2, 2: 4, 4: 0.5 }[s]))}>{speed}×</button>
+              <div style={{ marginLeft: 8, fontSize: 12, color: '#a8a8a8', fontFamily: 'Georgia,serif', fontStyle: 'italic' }}>{L.foot}</div>
+            </div>
           </div>
         </div>
+      </Modal>
+    );
+  }
 
-        {/* 注释 + 提示 */}
-        <div style={{ padding: '0 16px 12px', display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-          <span style={{ fontSize: 10, fontFamily: 'Georgia, serif', fontStyle: 'italic', color: 'var(--text-3)' }}>{L.sumNote}</span>
-          <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>{L.tapHint}</span>
+
+  // ─────────── Level 1 (多通道): Conv 堆叠视图 — 第二层卷积 (像素级复刻设计稿) ───────────
+  // 设计稿原生坐标系 1300×540, 整体按 SCALE 缩放放进 Modal。三块数据画布接真实 MNIST 数据,
+  // 其余布局 / 配色 / 连线 / 注释 / 装饰核图标均与设计稿一致。
+  function ConvStackView({ inputChannels, kernels, intermediates, outputMap,
+                           bias, oc, prevLayer, layer, numChannels, lang, onClose, onEnterFormula }) {
+    const zh = lang === 'zh';
+    const nv   = Math.min(3, inputChannels.length);
+    const inN  = (inputChannels[0] && inputChannels[0].length) || 28;
+    const outN = (outputMap && outputMap.length) || (inN - 2);
+    const OUT  = outN;
+    const cpIn = 108 / inN, cpOut = 108 / outN;
+    const SCALE = 0.56, W = Math.round(1300 * SCALE), H = Math.round(540 * SCALE);
+
+    const inRefs = useRef([]), intRefs = useRef([]), kerRefs = useRef([]), curRefs = useRef([]), outRef = useRef(null);
+
+    // 双色映射 (设计稿原函数): v<0 → 橙, v>0 → 蓝
+    function color(v) {
+      const r0 = 250, g0 = 248, b0 = 245;
+      if (v < 0) { const t = Math.min(1, -v / 0.7);  return [Math.round(r0 + (233 - r0) * t), Math.round(g0 + (150 - g0) * t), Math.round(b0 + (118 - b0) * t)]; }
+      if (v > 0) { const t = Math.min(1, v / 0.72); return [Math.round(r0 + (95 - r0) * t),  Math.round(g0 + (150 - g0) * t), Math.round(b0 + (205 - b0) * t)]; }
+      return [r0, g0, b0];
+    }
+    const maxAbs = (maps) => { let m = 1e-6; for (const mp of maps) for (let r = 0; r < mp.length; r++) for (let c = 0; c < mp[r].length; c++) { const a = Math.abs(mp[r][c]); if (a > m) m = a; } return m; };
+    const inMax  = useMemo(() => maxAbs(inputChannels.slice(0, nv)), [inputChannels, nv]);
+    const intMax = useMemo(() => maxAbs(intermediates.slice(0, nv)), [intermediates, nv]);
+    const outMax = useMemo(() => maxAbs([outputMap]), [outputMap]);
+
+    // 预计算中间结果完整像素 (供逐格揭示)
+    const intFull = useMemo(() => intermediates.slice(0, nv).map((mp) => {
+      const d = new Uint8ClampedArray(outN * outN * 4);
+      for (let y = 0; y < outN; y++) for (let x = 0; x < outN; x++) {
+        const rgb = color((mp[y][x] / intMax) * 0.72), p = (y * outN + x) * 4;
+        d[p] = rgb[0]; d[p + 1] = rgb[1]; d[p + 2] = rgb[2]; d[p + 3] = 255;
+      }
+      return d;
+    }), [intermediates, nv, intMax, outN]);
+
+    // 预计算输出完整像素 (与中间结果同步逐格揭示)
+    const outFull = useMemo(() => {
+      const d = new Uint8ClampedArray(outN * outN * 4);
+      for (let y = 0; y < outN; y++) for (let x = 0; x < outN; x++) {
+        const rgb = color((outputMap[y][x] / outMax) * 0.72), p = (y * outN + x) * 4;
+        d[p] = rgb[0]; d[p + 1] = rgb[1]; d[p + 2] = rgb[2]; d[p + 3] = 255;
+      }
+      return d;
+    }, [outputMap, outMax, outN]);
+
+    const sig = useMemo(() => {
+      let acc = 0; for (let r = 0; r < outN; r++) for (let c = 0; c < outN; c++) acc += Math.abs(outputMap[r][c]) * (r * 31 + c + 1);
+      return inN + '|' + outN + '|' + oc + '|' + nv + '|' + Math.round(acc * 1000);
+    }, [outputMap, inN, outN, oc, nv]);
+
+    // 静态: 输入通道
+    useEffect(() => {
+      for (let i = 0; i < nv; i++) {
+        const cv = inRefs.current[i]; if (!cv) continue;
+        const ctx = cv.getContext('2d'), img = ctx.createImageData(inN, inN), mp = inputChannels[i];
+        for (let y = 0; y < inN; y++) for (let x = 0; x < inN; x++) {
+          const rgb = color((mp[y][x] / inMax) * 0.72), p = (y * inN + x) * 4;
+          img.data[p] = rgb[0]; img.data[p + 1] = rgb[1]; img.data[p + 2] = rgb[2]; img.data[p + 3] = 255;
+        }
+        ctx.putImageData(img, 0, 0);
+      }
+    }, [sig, inMax]);
+
+    // 动画: 卷积核滑窗 + 中间结果逐格揭示 (设计稿原逻辑)
+    useEffect(() => {
+      const bg = [250, 248, 245], total = OUT * OUT;
+      let scan = 0, hold = 0, timer;
+      function frame() {
+        const done = Math.min(scan, total), oi = Math.min(done, total - 1), ox = oi % OUT, oy = (oi / OUT) | 0;
+        for (let i = 0; i < nv; i++) {
+          const ker = kerRefs.current[i], cur = curRefs.current[i];
+          if (ker) ker.style.transform = 'translate(' + (ox * cpIn) + 'px,' + (oy * cpIn) + 'px)';
+          if (cur) cur.style.transform = 'translate(' + (ox * cpOut) + 'px,' + (oy * cpOut) + 'px)';
+        }
+        for (let i = 0; i < nv; i++) {
+          const cv = intRefs.current[i]; if (!cv) continue;
+          const ctx = cv.getContext('2d'), img = ctx.createImageData(outN, outN), full = intFull[i];
+          for (let y = 0; y < outN; y++) for (let x = 0; x < outN; x++) {
+            const p = (y * outN + x) * 4;
+            if ((oy * OUT + ox) >= (y * OUT + x)) { img.data[p] = full[p]; img.data[p + 1] = full[p + 1]; img.data[p + 2] = full[p + 2]; img.data[p + 3] = 255; }
+            else { img.data[p] = bg[0]; img.data[p + 1] = bg[1]; img.data[p + 2] = bg[2]; img.data[p + 3] = 255; }
+          }
+          ctx.putImageData(img, 0, 0);
+        }
+        const o = outRef.current;
+        if (o) {
+          const ctx = o.getContext('2d'), img = ctx.createImageData(outN, outN);
+          for (let y = 0; y < outN; y++) for (let x = 0; x < outN; x++) {
+            const p = (y * outN + x) * 4;
+            if ((oy * OUT + ox) >= (y * OUT + x)) { img.data[p] = outFull[p]; img.data[p + 1] = outFull[p + 1]; img.data[p + 2] = outFull[p + 2]; img.data[p + 3] = 255; }
+            else { img.data[p] = bg[0]; img.data[p + 1] = bg[1]; img.data[p + 2] = bg[2]; img.data[p + 3] = 255; }
+          }
+          ctx.putImageData(img, 0, 0);
+        }
+      }
+      frame();
+      timer = setInterval(() => {
+        frame();
+        if (hold > 0) hold--;
+        else { scan += 1.5; if (scan >= total) { scan = total; hold = 45; frame(); scan = 0; } }
+      }, 33);
+      return () => clearInterval(timer);
+    }, [sig, intFull, outFull]);
+
+    const prevId = (prevLayer && prevLayer.id) || 'input';
+    const convId = (layer && layer.id) || 'conv';
+    const tops = [96, 232, 396], icoTops = [98, 234, 398];
+    const KICON = [
+      ['#bcd4ec', '#f4f4f4', '#f4f4f4', '#cfe0f0'],
+      ['#5bbfa3', '#eef6f2', '#dff0ea', '#7fcdb8'],
+      ['#e8c25a', '#bcd4ec', '#f4ead0', '#cfe0f0'],
+    ];
+    const chans = [0, 1, 2].slice(0, nv);
+
+    const A1 = zh
+      ? ['卷积核在输入通道上', '滑动得到', '中间结果', 'Click', ' 了解更多']
+      : ['Slide kernel over input', 'channel to get', 'intermediate result', 'Click', ' to learn more'];
+    const A2 = zh
+      ? ['每个输入通道', '用不同的卷积核', 'Hover', ' 查看数值！']
+      : ['Each input channel', 'gets a different kernel', 'Hover over', ' to see value!'];
+    const A3 = zh ? ['把所有中间结果相加', '再加上 bias'] : ['Add up all intermediate', 'results and then add bias'];
+    const interLbl = zh ? '中间结果' : 'intermediate';
+
+    return (
+      <Modal onClose={onClose} bg="#fff" maxW="96vw">
+        <div style={{ position: 'relative', width: W, height: H }}>
+          <button onClick={onClose} aria-label="close" style={{ position: 'absolute', top: 6, right: 8, width: 22, height: 22, border: 'none', background: 'transparent', cursor: 'pointer', color: '#bbb', fontSize: 17, lineHeight: 1, padding: 0, zIndex: 5 }}>×</button>
+          <div style={{ position: 'absolute', left: 0, top: 0, width: 1300, height: 540, transform: 'scale(' + SCALE + ')', transformOrigin: 'top left', background: '#fff', fontFamily: "-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif" }}>
+
+            {/* connectors */}
+            <svg width="1300" height="540" style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}>
+              <line x1="416" y1="152" x2="592" y2="152" stroke="#bdbdbd" strokeWidth="1.4" strokeDasharray="5 4" />
+              <line x1="416" y1="288" x2="592" y2="288" stroke="#bdbdbd" strokeWidth="1.4" strokeDasharray="5 4" />
+              <line x1="416" y1="452" x2="592" y2="452" stroke="#bdbdbd" strokeWidth="1.4" strokeDasharray="5 4" />
+              <path d="M704,152 C 790,152 840,300 872,300" fill="none" stroke="#bdbdbd" strokeWidth="1.3" strokeDasharray="5 4" />
+              <path d="M704,288 C 800,288 845,300 872,300" fill="none" stroke="#bdbdbd" strokeWidth="1.3" strokeDasharray="5 4" />
+              <path d="M704,452 C 800,452 845,300 872,300" fill="none" stroke="#bdbdbd" strokeWidth="1.3" strokeDasharray="5 4" />
+              <path d="M690,360 C 800,360 845,302 872,302" fill="none" stroke="#dcdcdc" strokeWidth="1" strokeDasharray="3 4" />
+              <path d="M690,378 C 800,378 845,304 872,304" fill="none" stroke="#dcdcdc" strokeWidth="1" strokeDasharray="3 4" />
+              <line x1="908" y1="300" x2="1082" y2="300" stroke="#bdbdbd" strokeWidth="1.4" strokeDasharray="5 4" />
+              <line x1="890" y1="318" x2="890" y2="332" stroke="#bdbdbd" strokeWidth="1.3" strokeDasharray="4 3" />
+              <path d="M268,150 C 282,148 292,150 301,152" fill="none" stroke="#9a9a9a" strokeWidth="1.3" />
+              <path d="M301,152 l -8,-3 M301,152 l -5,6" fill="none" stroke="#9a9a9a" strokeWidth="1.3" />
+              <path d="M268,292 C 282,290 292,290 301,290" fill="none" stroke="#9a9a9a" strokeWidth="1.3" />
+              <path d="M301,290 l -8,-2 M301,290 l -6,6" fill="none" stroke="#9a9a9a" strokeWidth="1.3" />
+              <path d="M952,258 C 938,268 918,282 905,294" fill="none" stroke="#9a9a9a" strokeWidth="1.3" />
+              <path d="M905,294 l 10,-1 M905,294 l 1,-8" fill="none" stroke="#9a9a9a" strokeWidth="1.3" />
+            </svg>
+
+            {/* headers */}
+            <div style={{ position: 'absolute', left: 260, top: 32, width: 200, textAlign: 'center', fontSize: 23, fontWeight: 700, color: '#2b2b2b' }}>{prevId}</div>
+            <div style={{ position: 'absolute', left: 260, top: 62, width: 200, textAlign: 'center', fontSize: 15, color: '#9a9a9a' }}>({inN}, {inN}, {numChannels})</div>
+            <div style={{ position: 'absolute', left: 548, top: 32, width: 200, textAlign: 'center', fontSize: 23, fontWeight: 700, color: '#2b2b2b' }}>{interLbl}</div>
+            <div style={{ position: 'absolute', left: 548, top: 62, width: 200, textAlign: 'center', fontSize: 15, color: '#9a9a9a' }}>({outN}, {outN}, {numChannels})</div>
+            <div style={{ position: 'absolute', left: 1040, top: 32, width: 200, textAlign: 'center', fontSize: 23, fontWeight: 700, color: '#2b2b2b' }}>{convId}</div>
+            <div style={{ position: 'absolute', left: 1040, top: 62, width: 200, textAlign: 'center', fontSize: 15, color: '#9a9a9a' }}>({outN}, {outN}, {numChannels})</div>
+
+            {/* per-channel: kernel icon + input + sliding kernel + intermediate + cursor */}
+            {chans.map((i) => (
+              <React.Fragment key={i}>
+                <div style={{ position: 'absolute', left: 272, top: icoTops[i], width: 16, height: 16, display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', gap: 1, background: '#cccccc' }}>
+                  {KICON[i].map((c, k) => <div key={k} style={{ background: c }} />)}
+                </div>
+                <canvas ref={(el) => (inRefs.current[i] = el)} width={inN} height={inN} style={{ position: 'absolute', left: 304, top: tops[i], width: 108, height: 108, border: '2px solid #b3b3b3', background: '#faf8f5' }} />
+                <div ref={(el) => (kerRefs.current[i] = el)} style={{ position: 'absolute', left: 304, top: tops[i], width: 3 * cpIn, height: 3 * cpIn, border: '1.5px solid rgba(50,50,50,0.9)', background: 'rgba(110,150,205,0.22)', boxSizing: 'border-box', pointerEvents: 'none', willChange: 'transform' }} />
+                <canvas ref={(el) => (intRefs.current[i] = el)} width={outN} height={outN}
+                        onClick={() => onEnterFormula && onEnterFormula(i)}
+                        style={{ position: 'absolute', left: 592, top: tops[i], width: 108, height: 108, border: '2px solid #b3b3b3', background: '#faf8f5', cursor: onEnterFormula ? 'pointer' : 'default' }} />
+                <div ref={(el) => (curRefs.current[i] = el)} style={{ position: 'absolute', left: 592, top: tops[i], width: cpOut, height: cpOut, border: '1.4px solid rgba(50,50,50,0.85)', boxSizing: 'border-box', pointerEvents: 'none', willChange: 'transform' }} />
+              </React.Fragment>
+            ))}
+
+            {/* omitted-channel ellipsis */}
+            <div style={{ position: 'absolute', left: 280, top: 352, fontSize: 30, lineHeight: 0.5, letterSpacing: 2, color: '#c4c4c4', fontWeight: 700 }}>⋮</div>
+            <div style={{ position: 'absolute', left: 360, top: 352, fontSize: 30, lineHeight: 0.5, color: '#c4c4c4', fontWeight: 700 }}>⋮</div>
+            <div style={{ position: 'absolute', left: 648, top: 352, fontSize: 30, lineHeight: 0.5, color: '#c4c4c4', fontWeight: 700 }}>⋮</div>
+
+            {/* conv selected output */}
+            <canvas ref={outRef} width={outN} height={outN}
+                    onClick={() => onEnterFormula && onEnterFormula(0)}
+                    style={{ position: 'absolute', left: 1084, top: 244, width: 112, height: 112, border: '3px solid #585858', background: '#faf8f5', cursor: onEnterFormula ? 'pointer' : 'default' }} />
+
+            {/* summation + bias */}
+            <div style={{ position: 'absolute', left: 872, top: 282, width: 36, height: 36, border: '1.5px solid #8a8a8a', borderRadius: 2, background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26, color: '#666', lineHeight: 1 }}>+</div>
+            <div style={{ position: 'absolute', left: 881, top: 332, width: 18, height: 18, borderRadius: '50%', background: '#34b3a0' }} />
+            <div style={{ position: 'absolute', left: 855, top: 354, width: 70, textAlign: 'center', fontSize: 15, fontStyle: 'italic', fontFamily: 'Georgia,serif', color: '#8a8a8a' }}>Bias</div>
+
+            {/* annotations */}
+            <div style={{ position: 'absolute', left: 40, top: 96, width: 222, textAlign: 'right', fontFamily: 'Georgia,serif', fontStyle: 'italic', fontSize: 15.5, lineHeight: 1.4, color: '#8a8a8a' }}>
+              <div style={{ fontStyle: 'normal', color: '#6a6a6a', fontSize: 14, marginBottom: 3 }}>Kernel <span style={{ display: 'inline-block', width: 14, height: 12, verticalAlign: 'middle', background: 'linear-gradient(90deg,#bcd4ec 50%,#f0f0f0 50%)', border: '1px solid #c8c8c8' }} /></div>
+              {A1[0]}<br />{A1[1]}<br />{A1[2]}<br /><b style={{ color: '#555' }}>{A1[3]}</b>{A1[4]}
+            </div>
+            <div style={{ position: 'absolute', left: 30, top: 248, width: 232, textAlign: 'right', fontFamily: 'Georgia,serif', fontStyle: 'italic', fontSize: 15.5, lineHeight: 1.4, color: '#8a8a8a' }}>
+              {A2[0]}<br />{A2[1]}<br /><b style={{ color: '#555' }}>{A2[2]}</b>{A2[3]}
+            </div>
+            <div style={{ position: 'absolute', left: 948, top: 200, width: 170, textAlign: 'left', fontFamily: 'Georgia,serif', fontStyle: 'italic', fontSize: 15.5, lineHeight: 1.4, color: '#8a8a8a' }}>
+              {A3[0]}<br />{A3[1]}
+            </div>
+
+          </div>
         </div>
       </Modal>
     );
@@ -578,147 +777,274 @@
     );
   }
 
-  // ════════════════════════════════════════════════════════════════
-  //  ReLU / Sigmoid / Tanh Formula (Fig 6B)
-  // ════════════════════════════════════════════════════════════════
+  // ─────────── Level 2: 激活函数视图 (Claude Design UI · 接真实数据) ───────────
+  // 替换原 ActivationFormulaView。relu: max(0,x)=y; sigmoid: σ(x)=y; tanh: tanh(x)=y。
+  // 配色沿用 Claude Design: 负→橙 / 正→蓝 / 零→白。useState/useEffect/useRef/useMemo / Modal / CloseBtn 均来自本文件作用域。
   function ActivationFormulaView({ layer, layerIdx, channelIdx, catIndex, onClose, lang, colormap, activationFn }) {
     const zh = lang === 'zh';
     const data = NETWORK_DATA[catIndex];
     const prev = LAYERS[layerIdx - 1];
-    const inputMap = rawChannel(data.raw[prev.id], channelIdx);
-    const outputMap = rawChannel(data.raw[layer.id], channelIdx);
+    const inputMap = rawChannel(data.raw[prev.id], channelIdx);   // 激活前(带符号)
+    const outputMap = rawChannel(data.raw[layer.id], channelIdx); // 激活后
     const n = outputMap ? outputMap.length : 0;
+    const fn = activationFn || 'relu';
 
-    const [pos, setPos] = useState({ x: 0, y: 0 });
+    const [pos, setPos] = useState(() => {        // 默认落在最负的像素 → 一进来就演示 max(0,负)=0
+      let mn = Infinity, mx = (n >> 1) || 0, my = (n >> 1) || 0;
+      for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) { const v = (inputMap[r] && inputMap[r][c]) || 0; if (v < mn) { mn = v; mx = c; my = r; } }
+      return { x: mx, y: my };
+    });
     const [playing, setPlaying] = useState(false);
     useEffect(() => {
       if (!playing || n === 0) return;
       let i = pos.y * n + pos.x;
-      const id = setInterval(() => { i = (i + 1) % (n * n); setPos({ x: i % n, y: Math.floor(i / n) }); }, 280);
+      const id = setInterval(() => { i = (i + 1) % (n * n); setPos({ x: i % n, y: Math.floor(i / n) }); }, 240);
       return () => clearInterval(id);
     }, [playing, n]);
     const x = Math.min(pos.x, Math.max(0, n - 1)), y = Math.min(pos.y, Math.max(0, n - 1));
     const inVal = (inputMap && inputMap[y] && inputMap[y][x]) || 0;
     const outVal = (outputMap && outputMap[y] && outputMap[y][x]) || 0;
 
-    const inMax = pctMaxAbs(inputMap, 0.8), outMax = pctMaxAbs(outputMap, 0.8);
-    const fn = activationFn || 'relu';
-    const title = zh
-      ? { relu: 'ReLU 激活', sigmoid: 'Sigmoid 激活', tanh: 'Tanh 激活' }[fn]
-      : { relu: 'ReLU Activation', sigmoid: 'Sigmoid Activation', tanh: 'Tanh Activation' }[fn];
-    const MAT = 150;
-    const pick = (cx, cy) => { setPlaying(false); setPos({ x: cx, y: cy }); };
+    const inRef = useRef(null), outRef = useRef(null);
 
-    const Formula = () => {
-      if (fn === 'sigmoid') return (<><span style={{ fontWeight: 600 }}>σ(</span><NumCell v={inVal} maxAbs={inMax} colormap={colormap} /><span>)</span></>);
-      if (fn === 'tanh') return (<><span style={{ fontWeight: 600 }}>tanh(</span><NumCell v={inVal} maxAbs={inMax} colormap={colormap} /><span>)</span></>);
-      return (<><span style={{ fontWeight: 600 }}>max(</span><NumCell v={0} maxAbs={1} colormap={colormap} /><span>,</span><NumCell v={inVal} maxAbs={inMax} colormap={colormap} /><span>)</span></>);
+    // 稳定数据签名: 仅当通道/数字/层变化时才重画(避免每次渲染重画/重启)
+    const sig = useMemo(() => {
+      let a = 0;
+      for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) a += (inputMap[r][c] || 0) * (r * 31 + c + 1);
+      return n + '|' + channelIdx + '|' + (layer && layer.id) + '|' + Math.round(a * 1000);
+    }, [inputMap, n, channelIdx, layer]);
+
+    // CD 配色饱和点(自适应, 85 分位), 负橙正蓝
+    const scale = useMemo(() => {
+      const negs = [], poss = [];
+      for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) { const v = inputMap[r][c]; if (v < 0) negs.push(-v); else if (v > 0) poss.push(v); }
+      negs.sort((a, b) => a - b); poss.sort((a, b) => a - b);
+      return { negS: Math.max(0.4, negs[Math.floor(negs.length * 0.85)] || 0.6), posS: Math.max(0.25, poss[Math.floor(poss.length * 0.85)] || 0.4) };
+    }, [sig]);
+
+    function color(v) {
+      if (v < 0) { const t = Math.min(1, -v / scale.negS); return [Math.round(252 + (233 - 252) * t), Math.round(252 + (150 - 252) * t), Math.round(252 + (118 - 252) * t)]; }
+      if (v > 0) { const t = Math.min(1, v / scale.posS); return [Math.round(252 + (168 - 252) * t), Math.round(252 + (200 - 252) * t), Math.round(252 + (230 - 252) * t)]; }
+      return [252, 252, 252];
+    }
+    function paint(canvas, M) {
+      if (!canvas || !M.length) return;
+      const ctx = canvas.getContext('2d'); const img = ctx.createImageData(n, n);
+      for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) { const a = color(M[r][c]); const i = (r * n + c) * 4; img.data[i] = a[0]; img.data[i + 1] = a[1]; img.data[i + 2] = a[2]; img.data[i + 3] = 255; }
+      ctx.putImageData(img, 0, 0);
+    }
+    useEffect(() => { paint(inRef.current, inputMap); paint(outRef.current, outputMap); }, [sig]);
+
+    // 选像素(hover / 点 / 拖, 兼容触摸)
+    const pickFrom = (e, ref) => {
+      const el = ref.current; if (!el) return;
+      const rc = el.getBoundingClientRect();
+      const cx = Math.max(0, Math.min(n - 1, Math.floor((e.clientX - rc.left) / (rc.width / n))));
+      const cy = Math.max(0, Math.min(n - 1, Math.floor((e.clientY - rc.top) / (rc.height / n))));
+      setPlaying(false); setPos({ x: cx, y: cy });
     };
 
+    const title = zh
+      ? ({ relu: 'ReLU 激活', sigmoid: 'Sigmoid 激活', tanh: 'Tanh 激活' }[fn])
+      : ({ relu: 'ReLU Activation', sigmoid: 'Sigmoid Activation', tanh: 'Tanh Activation' }[fn]);
+    const hint = zh
+      ? { a: '在矩阵上', b: '滑动/点击', c: '切换像素。' }
+      : { a: '', b: 'Hover over', c: ' the matrices to change pixel.' };
+
+    const S = 0.74, IMG = 297, cell = IMG / n;
+    const fmtNum = (v) => v.toFixed(2).replace('-', '−');
+    const cbtn = { width: 34, height: 34, borderRadius: '50%', background: '#c7cdd2', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' };
+    const numBox = (txt, hl) => (
+      <span style={{ width: 46, height: 42, border: '1px solid ' + (hl ? '#e3b29c' : '#d6d6d6'), borderRadius: 2, background: hl ? '#f6d4c6' : '#fbfbfb', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, color: hl ? '#6a5a52' : '#7a7a7a' }}>{txt}</span>
+    );
+    const marker = (
+      <div style={{ position: 'absolute', left: Math.round(x * cell), top: Math.round(y * cell), width: cell, height: cell, border: '1.5px solid #333', boxShadow: '0 0 0 1px #fff', pointerEvents: 'none', boxSizing: 'border-box' }} />
+    );
+    const heat = (ref, M) => (
+      <div style={{ position: 'absolute', left: 46, top: 143, width: IMG, height: IMG, border: '1px solid #eee', cursor: 'crosshair' }}
+        onPointerDown={(e) => pickFrom(e, ref)} onPointerMove={(e) => { if (e.buttons || e.pressure) pickFrom(e, ref); }} onMouseMove={(e) => pickFrom(e, ref)}>
+        <canvas ref={ref} width={n} height={n} style={{ width: IMG, height: IMG, display: 'block', imageRendering: 'pixelated' }} />
+        {marker}
+      </div>
+    );
+
     return (
-      <Modal onClose={onClose}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 18px 8px', borderBottom: '0.5px solid rgba(0,0,0,0.08)' }}>
-          <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{title}</span>
-          <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>· {zh ? '逐元素' : 'element-wise'} · {n}×{n}</span>
-          <span style={{ flex: 1 }} />
-          <PlayBtn playing={playing} onToggle={() => setPlaying(p => !p)} />
-          <CloseBtn onClose={onClose} />
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14, padding: '14px 20px' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
-            <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>{zh ? '输入' : 'input'}</span>
-            <MatrixView data={inputMap} maxAbs={inMax} size={MAT} colormap={colormap}
-              win={{ x, y, w: 1, h: 1 }} onPick={pick} />
+      <Modal onClose={onClose} bg="#fff" maxW="96vw">
+        <div style={{ width: 1024 * S, height: 530 * S, overflow: 'hidden' }}>
+          <div style={{ width: 1024, height: 530, transformOrigin: 'top left', transform: 'scale(' + S + ')', fontFamily: "-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif", position: 'relative' }}>
+            <div style={{ position: 'absolute', left: 10, top: 10, width: 1004, height: 510, background: '#fff', borderRadius: 16, border: '1px solid rgba(0,0,0,0.05)', boxShadow: '0 1px 3px rgba(0,0,0,0.05),0 10px 34px rgba(0,0,0,0.09)' }}>
+
+              <div style={{ position: 'absolute', left: 0, top: 30, width: 1004, textAlign: 'center', fontSize: 36, fontWeight: 400, color: '#3f4e5d', letterSpacing: 0.2 }}>{title}</div>
+
+              <div style={{ position: 'absolute', right: 24, top: 30, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={cbtn}><svg width="18" height="18" viewBox="0 0 24 24"><circle cx="12" cy="6.5" r="1.7" fill="#fff" /><rect x="10.6" y="10" width="2.8" height="9" rx="1.3" fill="#fff" /></svg></div>
+                <div style={cbtn} onClick={() => setPlaying(p => !p)}>
+                  {playing
+                    ? <svg width="14" height="14" viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1" fill="#fff" /><rect x="14" y="5" width="4" height="14" rx="1" fill="#fff" /></svg>
+                    : <svg width="16" height="16" viewBox="0 0 24 24"><path d="M7 4.5 L19 12 L7 19.5 Z" fill="#fff" /></svg>}
+                </div>
+                <div style={cbtn} onClick={onClose}><svg width="14" height="14" viewBox="0 0 24 24"><path d="M5 5 L19 19 M19 5 L5 19" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" /></svg></div>
+              </div>
+
+              <div style={{ position: 'absolute', left: 46, top: 113, fontSize: 21, color: '#3f4e5d' }}>{zh ? '输入' : 'Input'} <span style={{ color: '#9aa6b0', fontSize: 16 }}>({n}, {n})</span></div>
+              <div style={{ position: 'absolute', left: 681, top: 113, fontSize: 21, color: '#3f4e5d' }}>{zh ? '输出' : 'Output'} <span style={{ color: '#9aa6b0', fontSize: 16 }}>({n}, {n})</span></div>
+
+              {heat(inRef, inputMap)}
+              <div style={{ position: 'absolute', left: 681, top: 143, width: IMG, height: IMG, border: '1px solid #eee', cursor: 'crosshair' }}
+                onPointerDown={(e) => pickFrom(e, outRef)} onMouseMove={(e) => pickFrom(e, outRef)}>
+                <canvas ref={outRef} width={n} height={n} style={{ width: IMG, height: IMG, display: 'block', imageRendering: 'pixelated' }} />
+                <div style={{ position: 'absolute', left: Math.round(x * cell), top: Math.round(y * cell), width: cell, height: cell, border: '1.5px solid #333', boxShadow: '0 0 0 1px #fff', pointerEvents: 'none', boxSizing: 'border-box' }} />
+              </div>
+
+              <div style={{ position: 'absolute', left: 353, top: 248, width: 318, height: 48, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, fontSize: 33, fontWeight: 400, color: '#3f4e5d' }}>
+                {fn === 'relu' && <><span>max(</span>{numBox('0', false)}<span>,</span>{numBox(fmtNum(inVal), true)}<span>)</span></>}
+                {fn === 'sigmoid' && <><span>σ(</span>{numBox(fmtNum(inVal), true)}<span>)</span></>}
+                {fn === 'tanh' && <><span>tanh(</span>{numBox(fmtNum(inVal), true)}<span>)</span></>}
+                <span>=</span>{numBox(fmtNum(outVal), false)}
+              </div>
+
+              <div style={{ position: 'absolute', left: 0, top: 462, width: 1004, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+                <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#dce7f4', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <svg width="18" height="20" viewBox="0 0 24 26"><path d="M5 2 L5 18 L9 14 L12 21 L15 20 L12 13 L18 13 Z" fill="#5b6b7a" stroke="#fff" strokeWidth="1" strokeLinejoin="round" /></svg>
+                </div>
+                <div style={{ fontSize: 21, fontStyle: 'italic', color: '#7a8893' }}>{hint.a}<span style={{ fontWeight: 700, color: '#3f4e5d' }}>{hint.b}</span>{hint.c}</div>
+              </div>
+
+            </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-2)', padding: '10px 12px', background: 'var(--bg-grouped)', borderRadius: 8 }}>
-            <Formula />
-            <span style={{ fontWeight: 700, color: 'var(--text)' }}>=</span>
-            <NumCell v={outVal} maxAbs={outMax} colormap={colormap} w={48} />
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
-            <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>{zh ? '输出' : 'output'}</span>
-            <MatrixView data={outputMap} maxAbs={outMax} size={MAT} colormap={colormap}
-              win={{ x, y, w: 1, h: 1 }} onPick={pick} />
-          </div>
-        </div>
-        <div style={{ padding: '0 20px 12px', textAlign: 'center', fontSize: 9.5, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>
-          {zh ? '在任一矩阵上点/拖任意像素,两边同步高亮,公式显示真实数字' : 'tap/drag any pixel on either matrix — both highlight, formula shows real numbers'}
         </div>
       </Modal>
     );
   }
 
-  // ════════════════════════════════════════════════════════════════
-  //  Max Pooling Formula (Fig 6C) — 尺寸减半
-  // ════════════════════════════════════════════════════════════════
+
+  // ─────────── Level 2: 最大池化视图 (Claude Design UI · 接真实数据) ───────────
+  // 替换原 MaxPoolFormulaView。输入=ReLU 输出(非负, 单色蓝), 2×2 取最大 → 输出尺寸减半。
+  // useState/useEffect/useRef/useMemo / Modal / CloseBtn / rawChannel 均来自本文件作用域。
   function MaxPoolFormulaView({ layer, layerIdx, channelIdx, catIndex, onClose, lang, colormap }) {
     const zh = lang === 'zh';
     const data = NETWORK_DATA[catIndex];
     const prev = LAYERS[layerIdx - 1];
-    const inputMap = rawChannel(data.raw[prev.id], channelIdx);
-    const outputMap = rawChannel(data.raw[layer.id], channelIdx);
+    const inputMap = rawChannel(data.raw[prev.id], channelIdx);   // ReLU 输出
+    const outputMap = rawChannel(data.raw[layer.id], channelIdx); // 池化输出
     const inN = inputMap ? inputMap.length : 0;
     const outN = outputMap ? outputMap.length : 0;
 
-    const [pos, setPos] = useState({ x: 0, y: 0 });   // 输出坐标
+    const [pos, setPos] = useState(() => {            // 默认落在最强的池化像素
+      let mx = -Infinity, px = 0, py = 0;
+      for (let r = 0; r < outN; r++) for (let c = 0; c < outN; c++) { const v = (outputMap[r] && outputMap[r][c]) || 0; if (v > mx) { mx = v; px = c; py = r; } }
+      return { x: px, y: py };
+    });
     const [playing, setPlaying] = useState(false);
     useEffect(() => {
       if (!playing || outN === 0) return;
       let i = pos.y * outN + pos.x;
-      const id = setInterval(() => { i = (i + 1) % (outN * outN); setPos({ x: i % outN, y: Math.floor(i / outN) }); }, 420);
+      const id = setInterval(() => { i = (i + 1) % (outN * outN); setPos({ x: i % outN, y: Math.floor(i / outN) }); }, 320);
       return () => clearInterval(id);
     }, [playing, outN]);
     const ox = Math.min(pos.x, Math.max(0, outN - 1)), oy = Math.min(pos.y, Math.max(0, outN - 1));
 
-    const inMax = pctMaxAbs(inputMap, 0.8), outMax = pctMaxAbs(outputMap, 0.8);
-    // 2×2 窗口真值
+    // 2×2 窗口真值 [TL,TR,BL,BR] + 最大值
     const vals = [];
-    for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
-      vals.push((inputMap[oy * 2 + dy] && inputMap[oy * 2 + dy][ox * 2 + dx]) || 0);
+    for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) vals.push((inputMap[oy * 2 + dy] && inputMap[oy * 2 + dy][ox * 2 + dx]) || 0);
+    const result = Math.max.apply(null, vals);
+
+    const inRef = useRef(null), outRef = useRef(null);
+
+    // 稳定签名: 仅当通道/数字/层变化时才重画
+    const sig = useMemo(() => {
+      let a = 0;
+      for (let r = 0; r < inN; r++) for (let c = 0; c < inN; c++) a += (inputMap[r][c] || 0) * (r * 31 + c + 1);
+      return inN + '|' + channelIdx + '|' + (layer && layer.id) + '|' + Math.round(a * 1000);
+    }, [inputMap, inN, channelIdx, layer]);
+
+    // 单色蓝(CD), 自适应饱和点(92 分位)
+    const posS = useMemo(() => {
+      const ps = [];
+      for (let r = 0; r < inN; r++) for (let c = 0; c < inN; c++) { const v = inputMap[r][c]; if (v > 0) ps.push(v); }
+      ps.sort((a, b) => a - b);
+      return Math.max(0.25, ps[Math.floor(ps.length * 0.92)] || 0.5);
+    }, [sig]);
+    function blue(v) { const t = Math.min(1, Math.max(0, v / posS)); return [Math.round(252 + (168 - 252) * t), Math.round(252 + (200 - 252) * t), Math.round(252 + (230 - 252) * t)]; }
+    function paint(canvas, M, n) {
+      if (!canvas || !M.length) return;
+      const ctx = canvas.getContext('2d'); const img = ctx.createImageData(n, n);
+      for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) { const a = blue(M[r][c]); const i = (r * n + c) * 4; img.data[i] = a[0]; img.data[i + 1] = a[1]; img.data[i + 2] = a[2]; img.data[i + 3] = 255; }
+      ctx.putImageData(img, 0, 0);
     }
-    const result = Math.max(...vals);
-    const MAT = 150;
+    useEffect(() => { paint(inRef.current, inputMap, inN); paint(outRef.current, outputMap, outN); }, [sig]);
+
+    // 选窗口: 在输入上 → 落到所在 2×2 块; 在输出上 → 直接选像素
+    const pickIn = (e) => { const el = inRef.current; if (!el) return; const rc = el.getBoundingClientRect(); const cx = Math.floor((e.clientX - rc.left) / (rc.width / inN)), cy = Math.floor((e.clientY - rc.top) / (rc.height / inN)); setPlaying(false); setPos({ x: Math.max(0, Math.min(outN - 1, cx >> 1)), y: Math.max(0, Math.min(outN - 1, cy >> 1)) }); };
+    const pickOut = (e) => { const el = outRef.current; if (!el) return; const rc = el.getBoundingClientRect(); const cx = Math.floor((e.clientX - rc.left) / (rc.width / outN)), cy = Math.floor((e.clientY - rc.top) / (rc.height / outN)); setPlaying(false); setPos({ x: Math.max(0, Math.min(outN - 1, cx)), y: Math.max(0, Math.min(outN - 1, cy)) }); };
+
+    const S = 0.70, IW = 304, IH = 308;
+    const cInX = IW / inN, cInY = IH / inN, cOutX = IW / outN, cOutY = IH / outN;
+    const fmt = (v) => v.toFixed(2);
+    const cbtn = { width: 34, height: 34, borderRadius: '50%', background: '#c7cdd2', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' };
     const title = zh ? '最大池化' : 'Max Pooling';
+    const hint = zh ? { b: '滑动/点击', c: '矩阵移动 2×2 窗口。' } : { b: 'Hover over', c: ' the matrices to change kernel position.' };
 
     return (
-      <Modal onClose={onClose}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 18px 8px', borderBottom: '0.5px solid rgba(0,0,0,0.08)' }}>
-          <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{title}</span>
-          <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>
-            · {inN}×{inN} → {outN}×{outN} ({zh ? '尺寸减半' : 'halved'})
-          </span>
-          <span style={{ flex: 1 }} />
-          <PlayBtn playing={playing} onToggle={() => setPlaying(p => !p)} />
-          <CloseBtn onClose={onClose} />
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14, padding: '14px 20px' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
-            <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>{zh ? '输入' : 'input'} {inN}×{inN}</span>
-            <MatrixView data={inputMap} maxAbs={inMax} size={MAT} colormap={colormap}
-              win={{ x: ox * 2, y: oy * 2, w: 2, h: 2 }}
-              onPick={(cx, cy) => { setPlaying(false); setPos({ x: Math.min(Math.floor(cx / 2), outN - 1), y: Math.min(Math.floor(cy / 2), outN - 1) }); }} />
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-2)', padding: '10px 12px', background: 'var(--bg-grouped)', borderRadius: 8 }}>
-            <span style={{ fontWeight: 600 }}>max</span>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
-              {vals.map((v, i) => (
-                <span key={i} style={{ outline: v === result ? '1.5px solid ' + HL : 'none', outlineOffset: -1, borderRadius: 2 }}>
-                  <NumCell v={v} maxAbs={inMax} colormap={colormap} w={40} />
-                </span>
-              ))}
+      <Modal onClose={onClose} bg="#fff" maxW="96vw">
+        <div style={{ width: 1102 * S, height: 582 * S, overflow: 'hidden' }}>
+          <div style={{ width: 1102, height: 582, transformOrigin: 'top left', transform: 'scale(' + S + ')', position: 'relative', overflow: 'hidden', fontFamily: "-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif" }}>
+            <div style={{ position: 'absolute', left: -60, top: -80, width: 360, height: 300, background: 'radial-gradient(closest-side,rgba(120,170,225,0.18),transparent)', filter: 'blur(8px)' }} />
+            <div style={{ position: 'absolute', left: 430, top: -120, width: 340, height: 300, background: 'radial-gradient(closest-side,rgba(225,150,140,0.16),transparent)', filter: 'blur(8px)' }} />
+            <div style={{ position: 'absolute', right: -40, top: -70, width: 340, height: 300, background: 'radial-gradient(closest-side,rgba(120,170,225,0.16),transparent)', filter: 'blur(8px)' }} />
+
+            <div style={{ position: 'absolute', left: 30, top: 38, width: 1042, height: 506, background: '#fff', borderRadius: 18, border: '1px solid rgba(0,0,0,0.04)', boxShadow: '0 1px 3px rgba(0,0,0,0.05),0 14px 44px rgba(0,0,0,0.12)' }}>
+
+              <div style={{ position: 'absolute', left: 0, top: 22, width: 1042, textAlign: 'center', fontSize: 36, fontWeight: 400, color: '#3f4e5d', letterSpacing: 0.2 }}>{title}</div>
+
+              <div style={{ position: 'absolute', right: 24, top: 22, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={cbtn}><svg width="18" height="18" viewBox="0 0 24 24"><circle cx="12" cy="6.5" r="1.7" fill="#fff" /><rect x="10.6" y="10" width="2.8" height="9" rx="1.3" fill="#fff" /></svg></div>
+                <div style={cbtn} onClick={() => setPlaying(p => !p)}>
+                  {playing
+                    ? <svg width="16" height="16" viewBox="0 0 24 24"><path d="M7 4.5 L19 12 L7 19.5 Z" fill="#fff" /></svg>
+                    : <svg width="16" height="16" viewBox="0 0 24 24"><rect x="6.5" y="5" width="4" height="14" rx="1.2" fill="#fff" /><rect x="13.5" y="5" width="4" height="14" rx="1.2" fill="#fff" /></svg>}
+                </div>
+                <div style={cbtn} onClick={onClose}><svg width="16" height="16" viewBox="0 0 24 24"><path d="M6 6 L18 18 M18 6 L6 18" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" /></svg></div>
+              </div>
+
+              <div style={{ position: 'absolute', left: 48, top: 84, width: 304, textAlign: 'center', fontSize: 28, color: '#5a6a78' }}>{zh ? '输入' : 'Input'} ({inN}, {inN})</div>
+              <div style={{ position: 'absolute', left: 657, top: 84, width: 304, textAlign: 'center', fontSize: 28, color: '#5a6a78' }}>{zh ? '输出' : 'Output'} ({outN}, {outN})</div>
+
+              <div style={{ position: 'absolute', left: 48, top: 120, width: IW, height: IH, cursor: 'crosshair' }}
+                onPointerDown={pickIn} onPointerMove={(e) => { if (e.buttons || e.pressure) pickIn(e); }} onMouseMove={pickIn}>
+                <canvas ref={inRef} width={inN} height={inN} style={{ width: IW, height: IH, display: 'block', imageRendering: 'pixelated' }} />
+                <div style={{ position: 'absolute', left: Math.round(ox * 2 * cInX), top: Math.round(oy * 2 * cInY), width: Math.round(2 * cInX), height: Math.round(2 * cInY), border: '1.6px solid #2c2c2c', boxSizing: 'border-box', pointerEvents: 'none' }}>
+                  <div style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, background: '#2c2c2c' }} />
+                  <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, height: 1, background: '#2c2c2c' }} />
+                </div>
+              </div>
+
+              <div style={{ position: 'absolute', left: 657, top: 120, width: IW, height: IH, cursor: 'crosshair' }}
+                onPointerDown={pickOut} onMouseMove={pickOut}>
+                <canvas ref={outRef} width={outN} height={outN} style={{ width: IW, height: IH, display: 'block', imageRendering: 'pixelated' }} />
+                <div style={{ position: 'absolute', left: Math.round(ox * cOutX), top: Math.round(oy * cOutY), width: Math.round(cOutX), height: Math.round(cOutY), border: '1.6px solid #2c2c2c', boxSizing: 'border-box', pointerEvents: 'none' }} />
+              </div>
+
+              <div style={{ position: 'absolute', left: 352, top: 240, width: 305, height: 110, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 33, fontWeight: 400, color: '#3f4e5d' }}>
+                <span>max(</span>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', gap: 1, background: '#c4c4c4', border: '1px solid #c4c4c4', width: 75, height: 75 }}>
+                  {vals.map((v, i) => (
+                    <div key={i} style={{ background: v === result ? 'rgba(168,200,230,0.55)' : (i < 2 ? '#fff' : '#f3f3f3'), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, color: '#333' }}>{fmt(v)}</div>
+                  ))}
+                </div>
+                <span>)</span><span>=</span>
+                <div style={{ width: 46, height: 52, border: '1.5px solid #8a8a8a', borderRadius: 1, background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, color: '#333' }}>{fmt(result)}</div>
+              </div>
+
+              <div style={{ position: 'absolute', left: 0, top: 452, width: 1042, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+                <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#dce7f4', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <svg width="18" height="20" viewBox="0 0 24 26"><path d="M5 2 L5 18 L9 14 L12 21 L15 20 L12 13 L18 13 Z" fill="#5b6b7a" stroke="#fff" strokeWidth="1" strokeLinejoin="round" /></svg>
+                </div>
+                <div style={{ fontSize: 21, fontStyle: 'italic', color: '#7a8893' }}><span style={{ fontWeight: 700, color: '#3f4e5d' }}>{hint.b}</span>{hint.c}</div>
+              </div>
+
             </div>
-            <span style={{ fontWeight: 700, color: 'var(--text)' }}>=</span>
-            <NumCell v={result} maxAbs={outMax} colormap={colormap} w={48} />
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
-            <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>{zh ? '输出' : 'output'} {outN}×{outN}</span>
-            <MatrixView data={outputMap} maxAbs={outMax} size={MAT} colormap={colormap}
-              win={{ x: ox, y: oy, w: 1, h: 1 }}
-              onPick={(cx, cy) => { setPlaying(false); setPos({ x: cx, y: cy }); }} />
-          </div>
-        </div>
-        <div style={{ padding: '0 20px 12px', textAlign: 'center', fontSize: 9.5, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>
-          {zh ? '每 2×2 区域取最大值;点输入或输出双向联动' : 'max of each 2×2 patch; tap input or output for two-way linking'}
         </div>
       </Modal>
     );
